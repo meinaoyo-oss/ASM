@@ -9,13 +9,13 @@ metadata:
 
 # PCB 设计审查
 
-MCP 覆盖：`partial`。可调用 `pcb_inspect_package`、`pcb_validate_gerber_set` 和 `pcb_run_kicad_checks`；原理图语义、电源树、信号完整性和布局经验判断仍需外部证据。
+MCP 覆盖：`partial`。可调用 `kicad_inspect_design`、`kicad_semantic_review`、`kicad_power_tree_review`、`kicad_trace_signal`、`kicad_compare_revisions`、`pcb_inspect_package`、`pcb_validate_gerber_set` 和 `pcb_run_kicad_checks`；复杂原理图语义、信号完整性、EMC 和布局经验判断仍需外部证据。
 
 ## 工作流
 
 1. 先确认项目版本、输入路径和发布包哈希；不要把未确认的临时导出物当作正式设计。
-2. 用 `pcb_inspect_package` 识别文件角色，再按预期铜层数检查 Gerber、钻孔、板框、阻焊和丝印集合。
-3. 能使用 KiCad CLI 时执行 ERC/DRC；工具缺失、跳过或版本不明必须保留为未验证项，不能当作通过。
+2. 用 `kicad_inspect_design` 读取原生工程对象，再用 `pcb_inspect_package` 识别发布文件角色，按预期铜层数检查 Gerber、钻孔、板框、阻焊和丝印集合。
+3. 使用 `kicad_semantic_review`、`kicad_power_tree_review` 和 `kicad_trace_signal` 做结构化初审；能使用 KiCad CLI 时再执行 ERC/DRC。工具缺失、跳过或版本不明必须保留为未验证项，不能当作通过。
 4. 将工具结果与工程判断分开，按 `critical/error/warning/info` 归类，并给每条结论附文件、规则或报告证据。
 5. 仅输出审查结论和整改建议，不直接修改源工程、重命名生产文件或放行制造。
 
@@ -28,4 +28,3 @@ MCP 覆盖：`partial`。可调用 `pcb_inspect_package`、`pcb_validate_gerber_
 ## 输出
 
 返回 `pass`、`warn` 或 `fail`，并列出设计版本、检查范围、发现项、证据路径、未覆盖项目和人工签核人。任何关键检查缺失时不得输出无条件 `pass`。
-

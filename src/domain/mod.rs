@@ -7,6 +7,7 @@ mod bom;
 mod bom_risk;
 mod gerber;
 mod ipc2581;
+mod kicad_native;
 mod package;
 mod profile;
 mod release;
@@ -24,6 +25,11 @@ pub use gerber::{
     validate_gerber_set,
 };
 pub use ipc2581::{Ipc2581Validation, validate_ipc2581};
+pub use kicad_native::{
+    KicadComponent, KicadDocument, KicadDocumentKind, KicadNet, KicadPowerTree,
+    KicadProjectSnapshot, KicadRevisionDiff, KicadSignalTrace, compare_kicad_revisions,
+    inspect_kicad_project, parse_kicad_document, review_kicad_power_tree, trace_kicad_signal,
+};
 pub use package::{
     PackageInventory, PackageKind, PackageLimits, inspect_package, read_package_member,
 };

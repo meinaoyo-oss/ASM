@@ -1,0 +1,27 @@
+(kicad_pcb
+  (version 20240108)
+  (generator pcbnew)
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "VCC_5V")
+  (footprint "Resistor_SMD:R_0603_1608Metric"
+    (layer "F.Cu")
+    (at 10 20)
+    (fp_text reference "R1" (at 0 -1.2) (layer "F.SilkS"))
+    (fp_text value "22k" (at 0 1.2) (layer "F.Fab"))
+  )
+  (footprint "Package_TO_SOT_SMD:SOT-23"
+    (layer "F.Cu")
+    (at 20 20)
+    (fp_text reference "U1" (at 0 -2) (layer "F.SilkS"))
+    (fp_text value "LDO" (at 0 2) (layer "F.Fab"))
+  )
+  (footprint "Connector:USB-C"
+    (layer "F.Cu")
+    (at 30 20)
+    (fp_text reference "J1" (at 0 -2) (layer "F.SilkS"))
+    (fp_text value "USB-C" (at 0 2) (layer "F.Fab"))
+  )
+)
+

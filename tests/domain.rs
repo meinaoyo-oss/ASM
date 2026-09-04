@@ -2,10 +2,11 @@ use std::{fs, io::Write, path::PathBuf};
 
 use electronics_manufacturing_mcp::domain::{
     ManufacturingProfile, PackageLimits, ReleaseKind, ReleaseRequest, Severity, Status,
-    analyze_requirement_impact, build_traceability_matrix, compare_bom_cpl, inspect_package,
-    parse_bom, parse_cpl, parse_requirements, parse_trace_links, review_bom_risk,
-    review_requirement_quality, validate_gerber_set, validate_ipc2581, validate_release,
-    validate_spice_netlist,
+    analyze_requirement_impact, build_traceability_matrix, classify_pcb_file, compare_bom_cpl,
+    compare_kicad_revisions, inspect_kicad_project, inspect_package, parse_bom, parse_cpl,
+    parse_kicad_document, parse_requirements, parse_trace_links, review_bom_risk,
+    review_kicad_power_tree, review_requirement_quality, trace_kicad_signal, validate_gerber_set,
+    validate_ipc2581, validate_release, validate_spice_netlist,
 };
 
 fn fixture(path: &str) -> PathBuf {
@@ -316,4 +317,73 @@ fn spice_netlist_checks_ground_analysis_and_end() {
             .iter()
             .any(|finding| finding.code == "SPICE_MISSING_END")
     );
+}
+
+#[test]
+fn kicad_native_parser_extracts_components_layers_and_power() {
+    let pcb_path = fixture("kicad/rev-a/board.kicad_pcb");
+    let sch_path = fixture("kicad/rev-a/board.kicad_sch");
+    let pcb = parse_kicad_document(
+        &fs::read(&pcb_path).unwrap(),
+        pcb_path.display().to_string(),
+    )
+    .unwrap();
+    let sch = parse_kicad_document(
+        &fs::read(&sch_path).unwrap(),
+        sch_path.display().to_string(),
+    )
+    .unwrap();
+    assert_eq!(pcb.components.len(), 2);
+    assert_eq!(
+        pcb.components[0].footprint.as_deref(),
+        Some("Resistor_SMD:R_0603_1608Metric")
+    );
+    assert!(pcb.layers.contains(&"F.Cu".to_owned()));
+    assert!(sch.labels.contains(&"VCC_3V3".to_owned()));
+    let project = inspect_kicad_project(vec![pcb, sch], "rev-a");
+    assert_eq!(project.component_count, 4);
+    let power = review_kicad_power_tree(&project);
+    assert!(power.power_nets.contains(&"VCC_3V3".to_owned()));
+    assert!(power.ground_nets.contains(&"GND".to_owned()));
+    let trace = trace_kicad_signal(&project, "R1");
+    assert_eq!(trace.matched_components.len(), 2);
+}
+
+#[test]
+fn kicad_revision_diff_reports_changes() {
+    let left_path = fixture("kicad/rev-a/board.kicad_pcb");
+    let right_path = fixture("kicad/rev-b/board.kicad_pcb");
+    let left = parse_kicad_document(
+        &fs::read(&left_path).unwrap(),
+        left_path.display().to_string(),
+    )
+    .unwrap();
+    let right = parse_kicad_document(
+        &fs::read(&right_path).unwrap(),
+        right_path.display().to_string(),
+    )
+    .unwrap();
+    let left = inspect_kicad_project(vec![left], "rev-a");
+    let right = inspect_kicad_project(vec![right], "rev-b");
+    let diff = compare_kicad_revisions(&left, &right);
+    assert_eq!(diff.added_components, vec!["J1"]);
+    assert_eq!(diff.changed_components, vec!["R1"]);
+    assert!(diff.added_nets.contains(&"VCC_5V".to_owned()));
+    assert_eq!(diff.check.status, Status::Warn);
+}
+
+#[test]
+fn kicad_parser_preserves_utf8_properties_and_package_roles() {
+    let document = parse_kicad_document(
+        "(kicad_sch (version 20231120) (symbol (lib_id \"Device:R\") (property \"Reference\" \"R1\") (property \"Value\" \"电阻\")))".as_bytes(),
+        "utf8.kicad_sch",
+    )
+    .unwrap();
+    assert_eq!(document.components[0].value.as_deref(), Some("电阻"));
+    assert_eq!(classify_pcb_file("board.kicad_pcb").as_str(), "kicad_pcb");
+    assert_eq!(
+        classify_pcb_file("requirements.json").as_str(),
+        "requirements"
+    );
+    assert_eq!(classify_pcb_file("filter.cir").as_str(), "spice_netlist");
 }

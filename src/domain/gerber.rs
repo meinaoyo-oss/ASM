@@ -21,6 +21,11 @@ pub enum PcbFileRole {
     Bom,
     Cpl,
     Ipc2581,
+    KicadSchematic,
+    KicadPcb,
+    SpiceNetlist,
+    Requirements,
+    TraceLinks,
     Unknown,
 }
 
@@ -39,6 +44,11 @@ impl PcbFileRole {
             Self::Bom => "bom",
             Self::Cpl => "cpl",
             Self::Ipc2581 => "ipc2581",
+            Self::KicadSchematic => "kicad_schematic",
+            Self::KicadPcb => "kicad_pcb",
+            Self::SpiceNetlist => "spice_netlist",
+            Self::Requirements => "requirements",
+            Self::TraceLinks => "trace_links",
             Self::Unknown => "unknown",
         }
     }
@@ -89,6 +99,23 @@ pub fn classify_pcb_file(path: &str) -> PcbFileRole {
     let name = lower.rsplit('/').next().unwrap_or(&lower);
     if name.ends_with(".ipc") || name.ends_with(".ipc2581") || name.ends_with(".ipc-2581") {
         return PcbFileRole::Ipc2581;
+    }
+    if name.ends_with(".kicad_sch") {
+        return PcbFileRole::KicadSchematic;
+    }
+    if name.ends_with(".kicad_pcb") {
+        return PcbFileRole::KicadPcb;
+    }
+    if name.ends_with(".cir") || name.ends_with(".sp") || name.ends_with(".spice") {
+        return PcbFileRole::SpiceNetlist;
+    }
+    if name.contains("trace") && (name.ends_with(".csv") || name.ends_with(".json")) {
+        return PcbFileRole::TraceLinks;
+    }
+    if (name.contains("requirement") || name.contains("req"))
+        && (name.ends_with(".csv") || name.ends_with(".json") || name.ends_with(".md"))
+    {
+        return PcbFileRole::Requirements;
     }
     if name.ends_with(".drl") || name.ends_with(".xln") || name.ends_with(".exc") {
         return PcbFileRole::Drill;

@@ -1,0 +1,27 @@
+(kicad_pcb
+  (version 20240108)
+  (generator pcbnew)
+  (general (thickness 1.6))
+  (layers
+    (0 "F.Cu" signal)
+    (31 "B.Cu" signal)
+    (36 "B.SilkS" user "b.silkscreen")
+    (37 "F.SilkS" user "f.silkscreen")
+  )
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "VCC_3V3")
+  (footprint "Resistor_SMD:R_0603_1608Metric"
+    (layer "F.Cu")
+    (at 10 20)
+    (fp_text reference "R1" (at 0 -1.2) (layer "F.SilkS"))
+    (fp_text value "10k" (at 0 1.2) (layer "F.Fab"))
+  )
+  (footprint "Package_TO_SOT_SMD:SOT-23"
+    (layer "F.Cu")
+    (at 20 20)
+    (fp_text reference "U1" (at 0 -2) (layer "F.SilkS"))
+    (fp_text value "LDO" (at 0 2) (layer "F.Fab"))
+  )
+)
+

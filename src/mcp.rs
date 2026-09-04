@@ -21,10 +21,11 @@ use crate::{
     domain::{
         Artifact, CheckResult, Finding, ManufacturingProfile, PackageLimits, ReleaseKind,
         ReleaseReport, ReleaseRequest, Severity, Status, analyze_requirement_impact,
-        build_traceability_matrix, classify_pcb_file, compare_bom_cpl, inspect_package, parse_bom,
-        parse_cpl, parse_requirements, parse_trace_links, read_package_member, review_bom_risk,
-        review_requirement_quality, validate_bom, validate_gerber_set, validate_ipc2581,
-        validate_release, validate_spice_netlist,
+        build_traceability_matrix, classify_pcb_file, compare_bom_cpl, compare_kicad_revisions,
+        inspect_kicad_project, inspect_package, parse_bom, parse_cpl, parse_kicad_document,
+        parse_requirements, parse_trace_links, read_package_member, review_bom_risk,
+        review_kicad_power_tree, review_requirement_quality, trace_kicad_signal, validate_bom,
+        validate_gerber_set, validate_ipc2581, validate_release, validate_spice_netlist,
     },
     kicad::run_kicad_checks,
 };
@@ -213,6 +214,28 @@ pub struct SpiceParams {
     pub path: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct KicadDesignParams {
+    /// KiCad 项目目录、.kicad_pro、.kicad_sch 或 .kicad_pcb 路径。
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct KicadSignalParams {
+    /// KiCad 项目目录、.kicad_pro、.kicad_sch 或 .kicad_pcb 路径。
+    pub path: String,
+    /// 要查找的位号、网络名、标签、封装或库标识片段。
+    pub query: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct KicadCompareParams {
+    /// 左侧基线 KiCad 项目路径。
+    pub left_path: String,
+    /// 右侧候选 KiCad 项目路径。
+    pub right_path: String,
+}
+
 #[tool_router]
 impl ElectronicsMcp {
     pub fn new(config: AppConfig) -> Self {
@@ -229,6 +252,7 @@ impl ElectronicsMcp {
             "profiles": ["generic", "jlcpcb"],
             "release_kinds": ["fabrication", "assembly"],
             "workflow_tools": ["requirements_ingest", "requirements_quality_review", "requirements_traceability", "requirements_change_impact", "bom_review_risk", "spice_validate_netlist"],
+            "kicad_native_tools": ["kicad_inspect_design", "kicad_semantic_review", "kicad_power_tree_review", "kicad_trace_signal", "kicad_compare_revisions"],
             "network": false,
             "source_files_read_only": true,
             "allowed_roots": self.config.filesystem.allowed_roots,
@@ -512,6 +536,105 @@ impl ElectronicsMcp {
         })
     }
 
+    #[tool(
+        description = "直接解析 KiCad 原生 S-expression，返回版本、元件、网络、标签和 PCB 层摘要。"
+    )]
+    fn kicad_inspect_design(
+        &self,
+        Parameters(params): Parameters<KicadDesignParams>,
+    ) -> Json<ToolEnvelope> {
+        Json(match self.read_kicad_project(&params.path) {
+            Ok(project) => ToolEnvelope::success(
+                format!("已解析 KiCad 项目：{} 个元件", project.component_count),
+                vec![project.check.clone()],
+                Vec::new(),
+                &project,
+            ),
+            Err(error) => ToolEnvelope::failure("KICAD_NATIVE_INSPECTION_FAILED", error),
+        })
+    }
+
+    #[tool(description = "执行 KiCad 原生设计语义审查，检查位号、值、封装、连接证据和电源命名。")]
+    fn kicad_semantic_review(
+        &self,
+        Parameters(params): Parameters<KicadDesignParams>,
+    ) -> Json<ToolEnvelope> {
+        Json(match self.read_kicad_project(&params.path) {
+            Ok(project) => {
+                let power = review_kicad_power_tree(&project);
+                ToolEnvelope::success(
+                    "KiCad 原生语义审查完成",
+                    vec![project.check.clone(), power.check.clone()],
+                    Vec::new(),
+                    &json!({ "project": project, "power_tree": power }),
+                )
+            }
+            Err(error) => ToolEnvelope::failure("KICAD_SEMANTIC_REVIEW_FAILED", error),
+        })
+    }
+
+    #[tool(description = "从 KiCad 原生工程中识别电源/地网络、疑似稳压器件及命名缺口。")]
+    fn kicad_power_tree_review(
+        &self,
+        Parameters(params): Parameters<KicadDesignParams>,
+    ) -> Json<ToolEnvelope> {
+        Json(match self.read_kicad_project(&params.path) {
+            Ok(project) => {
+                let power = review_kicad_power_tree(&project);
+                ToolEnvelope::success(
+                    format!("电源树审查完成：{} 个电源网络", power.power_nets.len()),
+                    vec![power.check.clone()],
+                    Vec::new(),
+                    &power,
+                )
+            }
+            Err(error) => ToolEnvelope::failure("KICAD_POWER_REVIEW_FAILED", error),
+        })
+    }
+
+    #[tool(description = "按位号、网络名、标签、封装或库标识片段追踪 KiCad 原生设计对象。")]
+    fn kicad_trace_signal(
+        &self,
+        Parameters(params): Parameters<KicadSignalParams>,
+    ) -> Json<ToolEnvelope> {
+        Json(match self.read_kicad_project(&params.path) {
+            Ok(project) => {
+                let trace = trace_kicad_signal(&project, &params.query);
+                ToolEnvelope::success(
+                    format!("信号查询完成：{}", params.query),
+                    vec![trace.check.clone()],
+                    Vec::new(),
+                    &trace,
+                )
+            }
+            Err(error) => ToolEnvelope::failure("KICAD_SIGNAL_TRACE_FAILED", error),
+        })
+    }
+
+    #[tool(description = "比较两个 KiCad 原生工程版本，返回新增、删除和值/封装变化的元件及网络。")]
+    fn kicad_compare_revisions(
+        &self,
+        Parameters(params): Parameters<KicadCompareParams>,
+    ) -> Json<ToolEnvelope> {
+        Json(
+            match self.read_kicad_project(&params.left_path).and_then(|left| {
+                self.read_kicad_project(&params.right_path)
+                    .map(|right| (left, right))
+            }) {
+                Ok((left, right)) => {
+                    let diff = compare_kicad_revisions(&left, &right);
+                    ToolEnvelope::success(
+                        "KiCad 版本差异分析完成",
+                        vec![diff.check.clone()],
+                        Vec::new(),
+                        &diff,
+                    )
+                }
+                Err(error) => ToolEnvelope::failure("KICAD_REVISION_COMPARE_FAILED", error),
+            },
+        )
+    }
+
     fn package_limits(&self) -> PackageLimits {
         PackageLimits {
             max_entries: self.config.filesystem.max_archive_entries,
@@ -579,6 +702,44 @@ impl ElectronicsMcp {
             })
             .transpose()?;
         Ok((requirements, links))
+    }
+
+    fn read_kicad_project(&self, path: &str) -> Result<crate::domain::KicadProjectSnapshot> {
+        let input = self.config.resolve_input(Path::new(path))?;
+        let mut candidates = Vec::new();
+        if input.is_dir() {
+            for entry in fs::read_dir(&input)? {
+                let entry = entry?;
+                let candidate = entry.path();
+                if candidate.is_file() && is_kicad_document_path(&candidate) {
+                    candidates.push(candidate);
+                }
+            }
+            candidates.sort();
+        } else if is_kicad_document_path(&input) {
+            candidates.push(input.clone());
+        } else if has_extension(&input, "kicad_pro") {
+            for extension in ["kicad_sch", "kicad_pcb"] {
+                let candidate = input.with_extension(extension);
+                if candidate.is_file() {
+                    candidates.push(candidate);
+                }
+            }
+        } else {
+            return Err(anyhow!(
+                "不是 KiCad 工程或原生设计文件: {}",
+                input.display()
+            ));
+        }
+        let mut documents = Vec::new();
+        for candidate in candidates {
+            let (path, bytes) = self.read_input_file(&candidate.to_string_lossy())?;
+            documents.push(parse_kicad_document(&bytes, path.display().to_string())?);
+        }
+        Ok(inspect_kicad_project(
+            documents,
+            input.display().to_string(),
+        ))
     }
 
     fn load_package_files(&self, source: &str) -> Result<PackageFiles> {
@@ -712,4 +873,14 @@ fn status_label(status: Status) -> &'static str {
         Status::Fail => "fail",
         Status::Skipped => "skipped",
     }
+}
+
+fn is_kicad_document_path(path: &Path) -> bool {
+    has_extension(path, "kicad_sch") || has_extension(path, "kicad_pcb")
+}
+
+fn has_extension(path: &Path, extension: &str) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case(extension))
 }

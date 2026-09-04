@@ -1,0 +1,20 @@
+(kicad_sch
+  (version 20231120)
+  (generator eeschema)
+  (symbol
+    (lib_id "Device:R")
+    (at 10 10 0)
+    (property "Reference" "R1" (at 0 0 0) (effects (font (size 1 1))))
+    (property "Value" "10k" (at 0 0 0) (effects (font (size 1 1))))
+    (property "Footprint" "Resistor_SMD:R_0603_1608Metric" (at 0 0 0) (effects (font (size 1 1))))
+  )
+  (symbol
+    (lib_id "Regulator_Linear:AP2112K-3.3")
+    (at 20 20 0)
+    (property "Reference" "U1" (at 0 0 0) (effects (font (size 1 1))))
+    (property "Value" "LDO" (at 0 0 0) (effects (font (size 1 1))))
+  )
+  (label "VCC_3V3" (at 10 5 0) (effects (font (size 1 1))))
+  (label "GND" (at 10 15 0) (effects (font (size 1 1))))
+)
+
