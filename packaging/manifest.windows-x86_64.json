@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "electronics-manufacturing-mcp",
+  "name": "工程电子制造 MCP",
+  "version": "0.1.0",
+  "platform": "windows-x86_64",
+  "transport": "stdio",
+  "command": {
+    "path": "bin/electronics-manufacturing-mcp.exe",
+    "args": ["serve", "--config", "config/default.toml"],
+    "relative_paths_base": "package",
+    "working_directory": "workspace"
+  },
+  "skills_catalog": "skills/catalog.yaml",
+  "permissions": {
+    "network": false,
+    "filesystem_read": "workspace",
+    "filesystem_write": "explicit-report-directory-only",
+    "optional_subprocesses": ["kicad-cli.exe"]
+  },
+  "integrity": "SHA256SUMS.txt"
+}
+

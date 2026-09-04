@@ -1,0 +1,11 @@
+[filesystem]
+# 空列表表示只允许访问宿主启动 MCP 时的当前工作目录。
+allowed_roots = []
+max_file_bytes = 134217728
+max_archive_uncompressed_bytes = 536870912
+max_archive_entries = 10000
+
+[kicad]
+# 未配置 cli_path 时从 PATH 中查找 kicad-cli。
+timeout_seconds = 120
+

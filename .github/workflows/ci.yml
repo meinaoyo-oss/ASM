@@ -1,0 +1,167 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*.*.*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  quality:
+    name: Quality and tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Run tests
+        run: cargo test --all-targets --locked
+
+      - name: Validate Skills
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Skill validator dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir PyYAML
+
+      - name: Check Skill frontmatter and catalogs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+          import yaml
+
+          skill_files = sorted(Path("skills").glob("**/SKILL.md"))
+          assert len(skill_files) == 8, f"expected 8 skills, found {len(skill_files)}"
+          names = set()
+          for skill_file in skill_files:
+              content = skill_file.read_text(encoding="utf-8")
+              match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
+              assert match, f"missing frontmatter: {skill_file}"
+              frontmatter = yaml.safe_load(match.group(1))
+              assert isinstance(frontmatter, dict), f"invalid frontmatter: {skill_file}"
+              assert set(frontmatter) <= {"name", "description", "license", "allowed-tools", "metadata"}
+              name = frontmatter.get("name", "")
+              description = frontmatter.get("description", "")
+              assert re.fullmatch(r"[a-z0-9-]{1,64}", name), f"invalid skill name: {skill_file}"
+              assert isinstance(description, str) and description.strip(), f"missing description: {skill_file}"
+              assert name not in names, f"duplicate skill name: {name}"
+              names.add(name)
+
+          catalog = Path("skills/catalog.yaml").read_text(encoding="utf-8")
+          sources = json.loads(Path("skills/sources.lock.json").read_text(encoding="utf-8"))
+          assert "electronics-manufacturing-skills" in catalog
+          assert {item["id"] for item in sources["sources"]} >= {
+              "kicad-happy", "easyeda-mcp-pro", "eda-agent", "kicad-mcp-python"
+          }
+          assert catalog.count("path:") == 8
+          PY
+
+      - name: Validate text encoding and machine-readable files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import tomllib
+          from pathlib import Path
+
+          for path in Path(".").rglob("*"):
+              if not path.is_file() or any(part in {"target", "dist", ".git"} for part in path.parts):
+                  continue
+              data = path.read_bytes()
+              assert not data.startswith(b"\xef\xbb\xbf"), f"UTF-8 BOM: {path}"
+              assert b"\r\n" not in data, f"CRLF line ending: {path}"
+          for path in [
+              Path("packaging/manifest.linux-x86_64.json"),
+              Path("packaging/manifest.windows-x86_64.json"),
+              Path("skills/sources.lock.json"),
+          ]:
+              json.loads(path.read_text(encoding="utf-8"))
+          tomllib.loads(Path("config/default.toml").read_text(encoding="utf-8"))
+          PY
+
+  packages:
+    name: Build side-load packages
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install --yes jq mingw-w64 musl-tools zip
+
+      - name: Install Rust targets
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: x86_64-unknown-linux-musl,x86_64-pc-windows-gnu
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Linux and Windows packages
+        run: packaging/package.sh
+
+      - name: Verify package checksums and contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c SHA256SUMS.txt)
+          linux_archive="$(find dist -maxdepth 1 -name '*-linux-x86_64.tar.gz' -print -quit)"
+          linux_root="$(tar -tzf "$linux_archive" | sed -n '1s#^\([^/]*/\).*#\1#p')"
+          tar -xOf "$linux_archive" "$linux_root/SHA256SUMS.txt" |
+            while read -r expected relative; do
+              relative="${relative#./}"
+              actual="$(tar -xOf "$linux_archive" "$linux_root/$relative" | sha256sum | cut -d' ' -f1)"
+              test "$actual" = "$expected"
+            done
+          windows_archive="$(find dist -maxdepth 1 -name '*-windows-x86_64.zip' -print -quit)"
+          windows_root="$(unzip -Z1 "$windows_archive" | sed -n '1s#^\([^/]*/\).*#\1#p')"
+          unzip -t "$windows_archive" >/dev/null
+          unzip -p "$windows_archive" "$windows_root/SHA256SUMS.txt" |
+            while read -r expected relative; do
+              relative="${relative#./}"
+              actual="$(unzip -p "$windows_archive" "$windows_root/$relative" | sha256sum | cut -d' ' -f1)"
+              test "$actual" = "$expected"
+            done
+          tar -xOf "$linux_archive" "$linux_root/manifest.json" |
+            jq -e '.transport == "stdio" and .platform == "linux-x86_64"' >/dev/null
+          unzip -p "$windows_archive" "$windows_root/manifest.json" |
+            jq -e '.transport == "stdio" and .platform == "windows-x86_64"' >/dev/null
+
+      - name: Upload side-load packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: electronics-manufacturing-mcp-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS.txt

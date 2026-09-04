@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "policy": "References are workflow inspiration only. Do not copy source code, prompts, scripts, or text into these skills.",
+  "sources": [
+    {
+      "id": "kicad-happy",
+      "repository": "https://github.com/aklofas/kicad-happy",
+      "commit": "3cf837b2d6577d1369a45a36d5e9bac0e06ff5b6",
+      "license": "MIT",
+      "usage": "参考 KiCad 数据解析、数据手册、EMC、SPICE、采购和制造审查流程。"
+    },
+    {
+      "id": "easyeda-mcp-pro",
+      "repository": "https://github.com/oaslananka/easyeda-mcp-pro",
+      "commit": "68c86fa7ef7d0b013ed6cc588727eca3baf0e1c9",
+      "license": "MIT",
+      "usage": "参考 EasyEDA 工作流、网表/BOM/DRC/ERC 与制造导出检查。"
+    },
+    {
+      "id": "eda-agent",
+      "repository": "https://github.com/salitronic/eda-agent",
+      "commit": "1b60105cbe0c4bd557007b87bc04dda2fd4ef9a1",
+      "license": "Apache-2.0",
+      "usage": "参考 EDA 工程审查、库数据和受控自动化边界。"
+    },
+    {
+      "id": "kicad-mcp-python",
+      "repository": "https://github.com/Finerestaurant/kicad-mcp-python",
+      "commit": "4c7613a8951b88fbd60d89b8e87a2d6e8346e2f9",
+      "license": null,
+      "usage": "仅研究参考；不得复制代码、提示词、脚本或文本。",
+      "copy_policy": "research-only"
+    }
+  ]
+}
