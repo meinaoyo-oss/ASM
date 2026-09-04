@@ -1,0 +1,21 @@
+{
+  "requirements": [
+    {
+      "id": "REQ-001",
+      "title": "Input protection",
+      "statement": "The product shall tolerate a 24 V input transient.",
+      "status": "approved",
+      "verification_method": "test",
+      "tags": ["power", "safety"]
+    },
+    {
+      "id": "REQ-002",
+      "title": "Thermal operation",
+      "statement": "The board shall operate from -20 C to 85 C.",
+      "status": "draft",
+      "verification_method": "analysis",
+      "tags": ["thermal"]
+    }
+  ]
+}
+

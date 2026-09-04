@@ -1,0 +1,4 @@
+requirement_id,target,relation,evidence
+REQ-001,test:T-001,verified_by,results/T-001.json
+REQ-002,design:PCB-001,implemented_by,design/rev-a
+

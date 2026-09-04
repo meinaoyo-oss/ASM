@@ -1,6 +1,6 @@
 # 工程电子制造 MCP
 
-这是一个只读优先的 PCB 制造发布检查 MCP。它以独立 Rust 二进制运行，通过 stdio 接入任意支持本地 MCP 子进程的 Agent，不包含 Tauri 或前端代码。
+这是一个只读优先的工程电子制造 MCP。它以独立 Rust 二进制运行，通过 stdio 接入任意支持本地 MCP 子进程的 Agent，不包含 Tauri 或前端代码。
 
 ## 使用
 
@@ -15,7 +15,29 @@ electronics-manufacturing-mcp serve --config config/default.toml
 
 ## 首版边界
 
-支持目录或 ZIP 中的 BOM、CPL、Gerber、Excellon 和 IPC-2581 文件，内置通用及 JLCPCB 字段规则。检查结果不能替代制造商 CAM 审核、原生 ERC/DRC、法规认证或人工发布批准。
+支持目录或 ZIP 中的 BOM、CPL、Gerber、Excellon 和 IPC-2581 文件，需求追溯支持 JSON/CSV/Markdown，另提供 BOM 风险和 SPICE 网表静态检查，内置通用及 JLCPCB 字段规则。检查结果不能替代制造商 CAM 审核、原生 ERC/DRC、法规认证、实时供应商查询、仿真器或人工发布批准。
+
+当前 MCP 工具分为四组：
+
+- PCB 发布：`pcb_inspect_package`、`pcb_validate_bom`、`pcb_compare_bom_cpl`、`pcb_validate_gerber_set`、`pcb_validate_ipc2581`、`pcb_validate_release`、`pcb_run_kicad_checks`。
+- 需求与追溯：`requirements_ingest`、`requirements_quality_review`、`requirements_traceability`、`requirements_change_impact`。
+- 物料风险：`bom_review_risk`，只基于 BOM 中的生命周期、制造商、供应商和替代料字段，不联网查询库存。
+- 仿真准备：`spice_validate_netlist`，检查网表结构，不启动 ngspice/LTspice。
+
+需求文件可以是 JSON：
+
+```json
+{"requirements":[{"id":"REQ-001","statement":"Input shall tolerate 24 V","status":"approved","verification_method":"test"}]}
+```
+
+追溯链接可以是 CSV：
+
+```csv
+requirement_id,target,relation,evidence
+REQ-001,test:T-001,verified_by,results/T-001.json
+```
+
+`requirements_traceability` 会返回覆盖/未覆盖需求、未知 ID、追溯目标和证据缺口；`requirements_change_impact` 会按需求 ID返回受影响对象及同标签相关需求。
 
 构建侧载包前需安装 Rust 目标 `x86_64-unknown-linux-musl`、`x86_64-pc-windows-gnu` 及 MinGW 工具链，然后运行 `packaging/package.sh`。
 

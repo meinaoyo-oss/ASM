@@ -6,6 +6,9 @@ categories:
   - id: pcb-design
     name: PCB 设计
     description: PCB 发布文件、层集合和设计检查证据
+  - id: requirements
+    name: 需求与追溯
+    description: 工程需求质量、设计测试制造追溯和变更影响
   - id: component-data
     name: 元器件数据
     description: 数据手册、库对象和可追溯参数证据
@@ -20,6 +23,14 @@ categories:
     description: 电磁兼容风险识别与测试计划
 
 skills:
+  - id: requirements-traceability
+    name: 需求追溯与变更影响
+    category: requirements
+    path: skills/requirements/requirements-traceability
+    mcp_coverage: full
+    invocation: automatic
+    read_only: true
+    sources: [kicad-happy, eda-agent]
   - id: review-pcb-design
     name: PCB 设计审查
     category: pcb-design
@@ -40,7 +51,7 @@ skills:
     name: BOM 风险审查
     category: bom-manufacturing
     path: skills/bom-manufacturing/review-bom-risk
-    mcp_coverage: external
+    mcp_coverage: partial
     invocation: automatic
     read_only: true
     sources: [kicad-happy, eda-agent]
@@ -72,7 +83,7 @@ skills:
     name: SPICE 结果核验
     category: simulation
     path: skills/simulation/verify-spice-results
-    mcp_coverage: external
+    mcp_coverage: partial
     invocation: automatic
     read_only: true
     sources: [kicad-happy, eda-agent]
@@ -89,4 +100,3 @@ coverage_definitions:
   full: Rust MCP has a direct tool flow for the primary skill outcome.
   partial: Rust MCP supports file inspection or part of the workflow; external evidence or review is required.
   external: The primary workflow depends on an external engine, document source, supplier API, or laboratory evidence.
-

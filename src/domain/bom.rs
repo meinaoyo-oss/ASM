@@ -26,6 +26,10 @@ pub struct BomEntry {
     pub value: Option<String>,
     pub footprint: Option<String>,
     pub manufacturer_part_number: Option<String>,
+    pub manufacturer: Option<String>,
+    pub lifecycle_status: Option<String>,
+    pub supplier: Option<String>,
+    pub alternate_part_number: Option<String>,
     pub do_not_place: bool,
 }
 
@@ -76,6 +80,10 @@ pub fn parse_bom(bytes: &[u8], source: impl Into<String>) -> DomainResult<BomDoc
     let quantity_column = optional_column(&table, &QUANTITY_HEADERS);
     let footprint_column = optional_column(&table, &FOOTPRINT_HEADERS);
     let mpn_column = optional_column(&table, &MPN_HEADERS);
+    let manufacturer_column = optional_column(&table, &MANUFACTURER_HEADERS);
+    let lifecycle_column = optional_column(&table, &LIFECYCLE_HEADERS);
+    let supplier_column = optional_column(&table, &SUPPLIER_HEADERS);
+    let alternate_column = optional_column(&table, &ALTERNATE_HEADERS);
     let dnp_column = optional_column(&table, &DNP_HEADERS);
 
     let mut entries = Vec::new();
@@ -92,6 +100,11 @@ pub fn parse_bom(bytes: &[u8], source: impl Into<String>) -> DomainResult<BomDoc
             value: value_column.and_then(|index| non_empty(value_at(row, index))),
             footprint: footprint_column.and_then(|index| non_empty(value_at(row, index))),
             manufacturer_part_number: mpn_column.and_then(|index| non_empty(value_at(row, index))),
+            manufacturer: manufacturer_column.and_then(|index| non_empty(value_at(row, index))),
+            lifecycle_status: lifecycle_column.and_then(|index| non_empty(value_at(row, index))),
+            supplier: supplier_column.and_then(|index| non_empty(value_at(row, index))),
+            alternate_part_number: alternate_column
+                .and_then(|index| non_empty(value_at(row, index))),
             do_not_place: dnp_column
                 .map(|index| {
                     let value = value_at(row, index);
@@ -439,6 +452,28 @@ const MPN_HEADERS: [&str; 5] = [
     "lcscpart",
     "lcscpartnumber",
     "partnumber",
+];
+const MANUFACTURER_HEADERS: [&str; 3] = ["manufacturer", "mfr", "maker"];
+const LIFECYCLE_HEADERS: [&str; 5] = [
+    "lifecycle",
+    "lifecyclestatus",
+    "status",
+    "partstatus",
+    "rohsstatus",
+];
+const SUPPLIER_HEADERS: [&str; 5] = [
+    "supplier",
+    "distributor",
+    "source",
+    "vendor",
+    "approvedvendor",
+];
+const ALTERNATE_HEADERS: [&str; 5] = [
+    "alternate",
+    "alternatepart",
+    "alternatepartnumber",
+    "substitute",
+    "replacement",
 ];
 const DNP_HEADERS: [&str; 5] = ["dnp", "donotplace", "notfitted", "notmounted", "populate"];
 const X_HEADERS: [&str; 5] = ["midx", "x", "posx", "positionx", "centerx"];

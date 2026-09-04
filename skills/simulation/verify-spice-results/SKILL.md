@@ -9,7 +9,7 @@ metadata:
 
 # SPICE 结果核验
 
-MCP 覆盖：`external`。当前 MCP 不执行或解析完整 SPICE 工作流；需要外部 ngspice/LTspice/仿真平台和可审计结果文件。
+MCP 覆盖：`partial`。当前 MCP 可静态检查网表结构、地节点、分析指令和模型引用，但不执行完整 SPICE 工作流；仍需要外部 ngspice/LTspice/仿真平台和可审计结果文件。
 
 ## 工作流
 
@@ -22,4 +22,3 @@ MCP 覆盖：`external`。当前 MCP 不执行或解析完整 SPICE 工作流；
 ## 输出
 
 输出输入证据、收敛/警告摘要、关键波形或测量值、需求映射、 sanity check、模型限制、与实测差异和复现命令。无法复现或缺少模型时状态不得为完整通过。
-

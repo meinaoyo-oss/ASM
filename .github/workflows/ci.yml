@@ -58,7 +58,7 @@ jobs:
           import yaml
 
           skill_files = sorted(Path("skills").glob("**/SKILL.md"))
-          assert len(skill_files) == 8, f"expected 8 skills, found {len(skill_files)}"
+          assert len(skill_files) == 9, f"expected 9 skills, found {len(skill_files)}"
           names = set()
           for skill_file in skill_files:
               content = skill_file.read_text(encoding="utf-8")
@@ -80,7 +80,7 @@ jobs:
           assert {item["id"] for item in sources["sources"]} >= {
               "kicad-happy", "easyeda-mcp-pro", "eda-agent", "kicad-mcp-python"
           }
-          assert catalog.count("path:") == 8
+          assert catalog.count("path:") == 9
           PY
 
       - name: Validate text encoding and machine-readable files

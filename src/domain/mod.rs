@@ -4,17 +4,21 @@
 //! binary adapter can use these serializable values directly in tool results.
 
 mod bom;
+mod bom_risk;
 mod gerber;
 mod ipc2581;
 mod package;
 mod profile;
 mod release;
+mod spice;
+mod traceability;
 mod types;
 
 pub use bom::{
     BomCplComparison, BomDocument, BomEntry, BomValidation, CplDocument, Placement,
     compare_bom_cpl, parse_bom, parse_cpl, validate_bom,
 };
+pub use bom_risk::{BomRisk, BomRiskReport, review_bom_risk};
 pub use gerber::{
     ExcellonValidation, GerberValidation, PcbFileRole, classify_pcb_file, validate_excellon,
     validate_gerber_set,
@@ -25,4 +29,10 @@ pub use package::{
 };
 pub use profile::{ManufacturingProfile, ProfileRules};
 pub use release::{ReleaseKind, ReleaseReport, ReleaseRequest, validate_release};
+pub use spice::{SpiceComponent, SpiceValidation, validate_spice_netlist};
+pub use traceability::{
+    ImpactAnalysis, Requirement, RequirementDocument, RequirementQuality, TraceLink,
+    TraceLinkDocument, TraceabilityMatrix, analyze_requirement_impact, build_traceability_matrix,
+    parse_requirements, parse_trace_links, review_requirement_quality,
+};
 pub use types::{Artifact, CheckResult, DomainError, Finding, Severity, Status};

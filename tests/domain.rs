@@ -2,8 +2,10 @@ use std::{fs, io::Write, path::PathBuf};
 
 use electronics_manufacturing_mcp::domain::{
     ManufacturingProfile, PackageLimits, ReleaseKind, ReleaseRequest, Severity, Status,
-    compare_bom_cpl, inspect_package, parse_bom, parse_cpl, validate_gerber_set, validate_ipc2581,
-    validate_release,
+    analyze_requirement_impact, build_traceability_matrix, compare_bom_cpl, inspect_package,
+    parse_bom, parse_cpl, parse_requirements, parse_trace_links, review_bom_risk,
+    review_requirement_quality, validate_gerber_set, validate_ipc2581, validate_release,
+    validate_spice_netlist,
 };
 
 fn fixture(path: &str) -> PathBuf {
@@ -192,5 +194,126 @@ fn zip_path_traversal_is_rejected() {
             .unwrap_err()
             .to_string()
             .contains("unsafe package member path")
+    );
+}
+
+#[test]
+fn requirements_quality_and_traceability_report_gaps() {
+    let requirements = parse_requirements(
+        br#"{
+          "requirements": [
+            {"id":"REQ-001","title":"Power","statement":"Input shall tolerate 24 V","status":"approved","verification_method":"test","tags":["power"]},
+            {"id":"REQ-001","statement":"duplicate"},
+            {"id":"REQ-002","statement":"Output shall be isolated","tags":["safety"]}
+          ]
+        }"#,
+        "requirements.json",
+    )
+    .unwrap();
+    let quality = review_requirement_quality(&requirements);
+    assert_eq!(quality.check.status, Status::Fail);
+    assert!(
+        quality
+            .check
+            .findings
+            .iter()
+            .any(|finding| finding.code == "REQ_DUPLICATE_ID")
+    );
+    assert!(
+        quality
+            .check
+            .findings
+            .iter()
+            .any(|finding| finding.code == "REQ_MISSING_VERIFICATION_METHOD")
+    );
+
+    let links = parse_trace_links(
+        br#"[{"requirement_id":"REQ-001","target":"test:T-001","relation":"verified_by","evidence":"results/T-001.json"}]"#,
+        "links.json",
+    )
+    .unwrap();
+    let matrix = build_traceability_matrix(&requirements, Some(&links));
+    assert!(
+        matrix
+            .covered_requirement_ids
+            .contains(&"REQ-001".to_owned())
+    );
+    assert!(
+        matrix
+            .uncovered_requirement_ids
+            .contains(&"REQ-002".to_owned())
+    );
+    assert!(
+        matrix
+            .check
+            .findings
+            .iter()
+            .any(|finding| finding.code == "TRACE_REQUIREMENT_UNCOVERED")
+    );
+    let impact = analyze_requirement_impact(&requirements, Some(&links), "REQ-001").unwrap();
+    assert_eq!(impact.linked_targets[0].target, "test:T-001");
+}
+
+#[test]
+fn markdown_requirements_are_ingested() {
+    let document = parse_requirements(
+        b"# Requirements\n\n## REQ-100: Thermal\nBoard shall operate at 85 C.\nVerification: analysis\nStatus: approved\n",
+        "requirements.md",
+    )
+    .unwrap();
+    assert_eq!(document.requirements.len(), 1);
+    assert_eq!(document.requirements[0].id, "REQ-100");
+    assert_eq!(document.requirements[0].title.as_deref(), Some("Thermal"));
+    assert!(document.requirements[0].statement.contains("85 C"));
+}
+
+#[test]
+fn bom_risk_review_distinguishes_eol_and_missing_evidence() {
+    let document = parse_bom(
+        b"Designator,Quantity,Value,Footprint,MPN,Manufacturer,Lifecycle,Supplier,Alternate\nU1,1,MCU,QFN,STM32,Eve,EOL,,\nR1,1,10k,0603,R-10k,Acme,active,DigiKey,R-10k-alt\n",
+        "risk.csv",
+    )
+    .unwrap();
+    let report = review_bom_risk(&document, ManufacturingProfile::Jlcpcb);
+    assert_eq!(report.check.status, Status::Fail);
+    assert!(
+        report
+            .risks
+            .iter()
+            .any(|risk| risk.category == "lifecycle" && risk.severity == Severity::Error)
+    );
+    assert!(
+        report
+            .risks
+            .iter()
+            .any(|risk| risk.category == "supply" && risk.references == vec!["U1"])
+    );
+}
+
+#[test]
+fn spice_netlist_checks_ground_analysis_and_end() {
+    let valid = validate_spice_netlist(
+        b"RC filter\nV1 in 0 AC 1\nR1 in out 1k\nC1 out 0 1u\n.ac dec 10 10 1Meg\n.end\n",
+        "filter.cir",
+    );
+    assert_eq!(valid.check.status, Status::Pass);
+    assert_eq!(valid.component_count, 3);
+    assert!(valid.analyses.contains(&"ac".to_owned()));
+
+    let invalid = validate_spice_netlist(b"V1 in out 5\nR1 in out 1k\n", "bad.cir");
+    assert_eq!(invalid.check.status, Status::Fail);
+    assert!(
+        invalid
+            .check
+            .findings
+            .iter()
+            .any(|finding| finding.code == "SPICE_MISSING_GROUND")
+    );
+    assert!(
+        invalid
+            .check
+            .findings
+            .iter()
+            .any(|finding| finding.code == "SPICE_MISSING_END")
     );
 }

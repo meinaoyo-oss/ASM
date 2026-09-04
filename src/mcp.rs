@@ -20,9 +20,11 @@ use crate::{
     config::AppConfig,
     domain::{
         Artifact, CheckResult, Finding, ManufacturingProfile, PackageLimits, ReleaseKind,
-        ReleaseReport, ReleaseRequest, Severity, Status, classify_pcb_file, compare_bom_cpl,
-        inspect_package, parse_bom, parse_cpl, read_package_member, validate_bom,
-        validate_gerber_set, validate_ipc2581, validate_release,
+        ReleaseReport, ReleaseRequest, Severity, Status, analyze_requirement_impact,
+        build_traceability_matrix, classify_pcb_file, compare_bom_cpl, inspect_package, parse_bom,
+        parse_cpl, parse_requirements, parse_trace_links, read_package_member, review_bom_risk,
+        review_requirement_quality, validate_bom, validate_gerber_set, validate_ipc2581,
+        validate_release, validate_spice_netlist,
     },
     kicad::run_kicad_checks,
 };
@@ -172,6 +174,45 @@ pub struct ValidateReleaseParams {
     pub report_directory: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RequirementsParams {
+    /// JSON、CSV 或包含 REQ-* 标识的 Markdown 需求文件路径。
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TraceabilityParams {
+    /// 需求 JSON、CSV 或 Markdown 文件路径。
+    pub requirements_path: String,
+    /// 可选链接 JSON/CSV；省略时使用需求内声明的 targets。
+    pub links_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RequirementImpactParams {
+    /// 需求 JSON、CSV 或 Markdown 文件路径。
+    pub requirements_path: String,
+    /// 可选链接 JSON/CSV 文件路径。
+    pub links_path: Option<String>,
+    /// 要分析的需求 ID，例如 REQ-001。
+    pub requirement_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BomRiskParams {
+    /// BOM CSV 文件路径。
+    pub path: String,
+    /// 通用或 JLCPCB 字段规则。
+    #[serde(default)]
+    pub profile: ManufacturingProfile,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SpiceParams {
+    /// SPICE netlist 文件路径。
+    pub path: String,
+}
+
 #[tool_router]
 impl ElectronicsMcp {
     pub fn new(config: AppConfig) -> Self {
@@ -184,9 +225,10 @@ impl ElectronicsMcp {
         let data = json!({
             "server_version": env!("CARGO_PKG_VERSION"),
             "transport": "stdio",
-            "formats": ["directory", "zip", "bom-csv", "cpl-csv", "gerber-x2-x3", "excellon", "ipc-2581"],
+            "formats": ["directory", "zip", "bom-csv", "cpl-csv", "gerber-x2-x3", "excellon", "ipc-2581", "requirements-json-csv-markdown", "trace-links-json-csv", "spice-netlist"],
             "profiles": ["generic", "jlcpcb"],
             "release_kinds": ["fabrication", "assembly"],
+            "workflow_tools": ["requirements_ingest", "requirements_quality_review", "requirements_traceability", "requirements_change_impact", "bom_review_risk", "spice_validate_netlist"],
             "network": false,
             "source_files_read_only": true,
             "allowed_roots": self.config.filesystem.allowed_roots,
@@ -333,6 +375,143 @@ impl ElectronicsMcp {
         })
     }
 
+    #[tool(
+        description = "读取 JSON、CSV 或 Markdown 需求文件，返回稳定 ID、陈述、生命周期和声明目标。"
+    )]
+    fn requirements_ingest(
+        &self,
+        Parameters(params): Parameters<RequirementsParams>,
+    ) -> Json<ToolEnvelope> {
+        Json(match self.read_requirements(&params.path) {
+            Ok(document) => {
+                let quality = review_requirement_quality(&document);
+                ToolEnvelope::success(
+                    format!("已读取 {} 条需求", document.requirements.len()),
+                    vec![quality.check.clone()],
+                    Vec::new(),
+                    &json!({ "document": document, "quality": quality }),
+                )
+            }
+            Err(error) => ToolEnvelope::failure("REQUIREMENTS_INGEST_FAILED", error),
+        })
+    }
+
+    #[tool(description = "审查需求质量，检查 ID 重复、空陈述、验证方法、状态和可复现来源。")]
+    fn requirements_quality_review(
+        &self,
+        Parameters(params): Parameters<RequirementsParams>,
+    ) -> Json<ToolEnvelope> {
+        Json(match self.read_requirements(&params.path) {
+            Ok(document) => {
+                let quality = review_requirement_quality(&document);
+                ToolEnvelope::success(
+                    format!("需求质量审查完成：{} 条需求", quality.requirement_count),
+                    vec![quality.check.clone()],
+                    Vec::new(),
+                    &quality,
+                )
+            }
+            Err(error) => ToolEnvelope::failure("REQUIREMENTS_QUALITY_FAILED", error),
+        })
+    }
+
+    #[tool(description = "建立需求到设计、测试、制造或其他对象的追溯矩阵，并报告未覆盖需求。")]
+    fn requirements_traceability(
+        &self,
+        Parameters(params): Parameters<TraceabilityParams>,
+    ) -> Json<ToolEnvelope> {
+        Json(
+            match self
+                .read_traceability_inputs(&params.requirements_path, params.links_path.as_deref())
+            {
+                Ok((requirements, links)) => {
+                    let quality = review_requirement_quality(&requirements);
+                    let matrix = build_traceability_matrix(&requirements, links.as_ref());
+                    ToolEnvelope::success(
+                        format!(
+                            "追溯矩阵完成：{} 条需求、{} 条链接",
+                            matrix.requirement_count, matrix.link_count
+                        ),
+                        vec![quality.check.clone(), matrix.check.clone()],
+                        Vec::new(),
+                        &json!({ "requirements": requirements, "links": links, "matrix": matrix }),
+                    )
+                }
+                Err(error) => ToolEnvelope::failure("REQUIREMENTS_TRACEABILITY_FAILED", error),
+            },
+        )
+    }
+
+    #[tool(description = "分析单条需求的设计/测试/制造影响目标及同标签相关需求。")]
+    fn requirements_change_impact(
+        &self,
+        Parameters(params): Parameters<RequirementImpactParams>,
+    ) -> Json<ToolEnvelope> {
+        Json(
+            match self
+                .read_traceability_inputs(&params.requirements_path, params.links_path.as_deref())
+            {
+                Ok((requirements, links)) => match analyze_requirement_impact(
+                    &requirements,
+                    links.as_ref(),
+                    &params.requirement_id,
+                ) {
+                    Ok(impact) => ToolEnvelope::success(
+                        format!("已分析 {} 的变更影响", impact.requirement.id),
+                        vec![impact.check.clone()],
+                        Vec::new(),
+                        &impact,
+                    ),
+                    Err(error) => ToolEnvelope::failure("REQUIREMENT_IMPACT_FAILED", error),
+                },
+                Err(error) => ToolEnvelope::failure("REQUIREMENT_IMPACT_INPUT_FAILED", error),
+            },
+        )
+    }
+
+    #[tool(
+        description = "审查 BOM 生命周期、制造商、供应来源、替代料和缺失证据风险；不查询实时供应商 API。"
+    )]
+    fn bom_review_risk(&self, Parameters(params): Parameters<BomRiskParams>) -> Json<ToolEnvelope> {
+        Json(
+            match self
+                .read_input_file(&params.path)
+                .and_then(|(path, bytes)| {
+                    let document = parse_bom(&bytes, path.display().to_string())?;
+                    Ok(review_bom_risk(&document, params.profile))
+                }) {
+                Ok(report) => ToolEnvelope::success(
+                    format!("BOM 风险审查完成：{} 项风险", report.risk_count),
+                    vec![report.check.clone()],
+                    Vec::new(),
+                    &report,
+                ),
+                Err(error) => ToolEnvelope::failure("BOM_RISK_REVIEW_FAILED", error),
+            },
+        )
+    }
+
+    #[tool(
+        description = "静态检查 SPICE 网表的元件、节点、地、分析指令、模型引用和终止符，不启动仿真器。"
+    )]
+    fn spice_validate_netlist(
+        &self,
+        Parameters(params): Parameters<SpiceParams>,
+    ) -> Json<ToolEnvelope> {
+        Json(match self.read_input_file(&params.path) {
+            Ok((path, bytes)) => {
+                let validation = validate_spice_netlist(&bytes, path.display().to_string());
+                ToolEnvelope::success(
+                    format!("SPICE 网表检查完成：{} 个元件", validation.component_count),
+                    vec![validation.check.clone()],
+                    Vec::new(),
+                    &validation,
+                )
+            }
+            Err(error) => ToolEnvelope::failure("SPICE_NETLIST_INPUT_FAILED", error),
+        })
+    }
+
     fn package_limits(&self) -> PackageLimits {
         PackageLimits {
             max_entries: self.config.filesystem.max_archive_entries,
@@ -379,6 +558,29 @@ impl ElectronicsMcp {
         Ok((bom, cpl, comparison))
     }
 
+    fn read_requirements(&self, path: &str) -> Result<crate::domain::RequirementDocument> {
+        let (path, bytes) = self.read_input_file(path)?;
+        parse_requirements(&bytes, path.display().to_string()).map_err(anyhow::Error::from)
+    }
+
+    fn read_traceability_inputs(
+        &self,
+        requirements_path: &str,
+        links_path: Option<&str>,
+    ) -> Result<(
+        crate::domain::RequirementDocument,
+        Option<crate::domain::TraceLinkDocument>,
+    )> {
+        let requirements = self.read_requirements(requirements_path)?;
+        let links = links_path
+            .map(|path| {
+                let (path, bytes) = self.read_input_file(path)?;
+                parse_trace_links(&bytes, path.display().to_string()).map_err(anyhow::Error::from)
+            })
+            .transpose()?;
+        Ok((requirements, links))
+    }
+
     fn load_package_files(&self, source: &str) -> Result<PackageFiles> {
         let source = self.config.resolve_input(Path::new(source))?;
         let limits = self.package_limits();
@@ -423,7 +625,7 @@ impl ElectronicsMcp {
 #[tool_handler(
     name = "electronics-manufacturing-mcp",
     version = "0.1.0",
-    instructions = "只读检查 PCB 制造发布包。工具结果不是制造放行、法规认证或人工批准。"
+    instructions = "只读分析工程电子制造文件、需求追溯、BOM 风险、SPICE 网表和 PCB 制造发布包。工具结果不是制造放行、法规认证或人工批准。"
 )]
 impl ServerHandler for ElectronicsMcp {}
 
