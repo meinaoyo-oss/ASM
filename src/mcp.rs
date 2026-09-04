@@ -25,8 +25,9 @@ use crate::{
         compare_kicad_revisions, compare_kicad_schematic_pcb, inspect_kicad_project,
         inspect_package, parse_bom, parse_cpl, parse_kicad_document, parse_requirements,
         parse_trace_links, read_package_member, review_bom_risk, review_kicad_design,
-        review_kicad_power_tree, review_requirement_quality, trace_kicad_signal, validate_bom,
-        validate_gerber_set, validate_ipc2581, validate_release, validate_spice_netlist,
+        review_kicad_power_tree, review_pcb_dfm_dfa_dft, review_requirement_quality,
+        trace_kicad_signal, validate_bom, validate_gerber_set, validate_ipc2581, validate_release,
+        validate_spice_netlist,
     },
     kicad::run_kicad_checks,
 };
@@ -237,6 +238,15 @@ pub struct KicadCompareParams {
     pub right_path: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PcbDfmParams {
+    /// KiCad 项目目录、.kicad_pro 或 .kicad_pcb 路径。
+    pub path: String,
+    /// 通用或 JLCPCB 预检阈值。
+    #[serde(default)]
+    pub profile: ManufacturingProfile,
+}
+
 #[tool_router]
 impl ElectronicsMcp {
     pub fn new(config: AppConfig) -> Self {
@@ -257,6 +267,7 @@ impl ElectronicsMcp {
             "kicad_connectivity_tools": ["kicad_connectivity_review"],
             "cross_domain_tools": ["kicad_schematic_pcb_consistency"],
             "kicad_review_tools": ["kicad_design_review"],
+            "manufacturing_review_tools": ["pcb_dfm_dfa_dft_review"],
             "network": false,
             "source_files_read_only": true,
             "allowed_roots": self.config.filesystem.allowed_roots,
@@ -706,6 +717,30 @@ impl ElectronicsMcp {
                 Err(error) => ToolEnvelope::failure("KICAD_REVISION_COMPARE_FAILED", error),
             },
         )
+    }
+
+    #[tool(
+        description = "执行 KiCad PCB DFM/DFA/DFT 预检：层集合、板框、线宽、过孔、板边焊盘、贴装和测试入口。"
+    )]
+    fn pcb_dfm_dfa_dft_review(
+        &self,
+        Parameters(params): Parameters<PcbDfmParams>,
+    ) -> Json<ToolEnvelope> {
+        Json(match self.read_kicad_project(&params.path) {
+            Ok(project) => {
+                let review = review_pcb_dfm_dfa_dft(&project, params.profile);
+                ToolEnvelope::success(
+                    format!(
+                        "PCB DFM/DFA/DFT 预检完成：{} 个发现项",
+                        review.findings.len()
+                    ),
+                    review.checks.clone(),
+                    Vec::new(),
+                    &review,
+                )
+            }
+            Err(error) => ToolEnvelope::failure("PCB_DFM_REVIEW_FAILED", error),
+        })
     }
 
     fn package_limits(&self) -> PackageLimits {

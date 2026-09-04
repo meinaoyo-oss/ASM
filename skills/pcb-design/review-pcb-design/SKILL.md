@@ -9,7 +9,7 @@ metadata:
 
 # PCB 设计审查
 
-MCP 覆盖：`partial`。可调用 `kicad_inspect_design`、`kicad_design_review`、`kicad_semantic_review`、`kicad_connectivity_review`、`kicad_schematic_pcb_consistency`、`kicad_power_tree_review`、`kicad_trace_signal`、`kicad_compare_revisions`、`pcb_inspect_package`、`pcb_validate_gerber_set` 和 `pcb_run_kicad_checks`；真实 KiCad 库符号引脚映射、信号完整性、EMC 和布局经验判断仍需外部证据。
+MCP 覆盖：`partial`。可调用 `kicad_inspect_design`、`kicad_design_review`、`kicad_semantic_review`、`kicad_connectivity_review`、`kicad_schematic_pcb_consistency`、`kicad_power_tree_review`、`kicad_trace_signal`、`kicad_compare_revisions`、`pcb_dfm_dfa_dft_review`、`pcb_inspect_package`、`pcb_validate_gerber_set` 和 `pcb_run_kicad_checks`；阈值是预检规则，真实 KiCad 库符号引脚映射、信号完整性、EMC 和布局经验判断仍需外部证据。
 
 ## 工作流
 
@@ -17,9 +17,10 @@ MCP 覆盖：`partial`。可调用 `kicad_inspect_design`、`kicad_design_review
 2. 用 `kicad_inspect_design` 读取原生工程对象，再用 `pcb_inspect_package` 识别发布文件角色，按预期铜层数检查 Gerber、钻孔、板框、阻焊和丝印集合。
 3. 使用 `kicad_semantic_review`、`kicad_connectivity_review`、`kicad_power_tree_review` 和 `kicad_trace_signal` 做结构化初审；连通性结果只对全局坐标可识别的 pins/wires 有效，库定义中的局部 pin 坐标不能直接当作实例连线。能使用 KiCad CLI 时再执行 ERC/DRC。工具缺失、跳过或版本不明必须保留为未验证项，不能当作通过。
 4. 运行 `kicad_design_review` 汇总元件合同、电源、连通性、时钟/复位和接口命名规则，查看各 check 的覆盖范围后再下结论。
-5. 对同时存在原理图和 PCB 的工程运行 `kicad_schematic_pcb_consistency`，核对位号集合、封装、pin/pad 编号和有标签网络；没有 pin-to-net 证据时保留为未验证项。
-6. 将工具结果与工程判断分开，按 `critical/error/warning/info` 归类，并给每条结论附文件、规则或报告证据。
-7. 仅输出审查结论和整改建议，不直接修改源工程、重命名生产文件或放行制造。
+5. 对 PCB 运行 `pcb_dfm_dfa_dft_review`，检查板框闭合、铜层、线宽、过孔、焊盘边距、封装 pad 和基础测试入口；报告中的阈值是预检 profile，不是工厂能力承诺。
+6. 对同时存在原理图和 PCB 的工程运行 `kicad_schematic_pcb_consistency`，核对位号集合、封装、pin/pad 编号和有标签网络；没有 pin-to-net 证据时保留为未验证项。
+7. 将工具结果与工程判断分开，按 `critical/error/warning/info` 归类，并给每条结论附文件、规则或报告证据。
+8. 仅输出审查结论和整改建议，不直接修改源工程、重命名生产文件或放行制造。
 
 ## 重点判断
 

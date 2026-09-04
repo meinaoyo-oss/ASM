@@ -6,8 +6,9 @@ use electronics_manufacturing_mcp::domain::{
     classify_pcb_file, compare_bom_cpl, compare_kicad_revisions, compare_kicad_schematic_pcb,
     inspect_kicad_project, inspect_package, parse_bom, parse_cpl, parse_kicad_document,
     parse_requirements, parse_trace_links, review_bom_risk, review_kicad_design,
-    review_kicad_power_tree, review_requirement_quality, trace_kicad_signal, validate_gerber_set,
-    validate_ipc2581, validate_release, validate_spice_netlist,
+    review_kicad_power_tree, review_pcb_dfm_dfa_dft, review_requirement_quality,
+    trace_kicad_signal, validate_gerber_set, validate_ipc2581, validate_release,
+    validate_spice_netlist,
 };
 
 fn fixture(path: &str) -> PathBuf {
@@ -498,4 +499,23 @@ fn kicad_design_review_aggregates_rule_checks() {
             .any(|check| check.id == "kicad_power_evidence")
     );
     assert_eq!(review.status, Status::Warn);
+}
+
+#[test]
+fn pcb_dfm_review_checks_outline_tracks_vias_and_edge_clearance() {
+    let path = fixture("kicad/rev-a/board.kicad_pcb");
+    let pcb = parse_kicad_document(&fs::read(&path).unwrap(), path.display().to_string()).unwrap();
+    assert_eq!(pcb.board_outline.len(), 4);
+    assert_eq!(pcb.tracks.len(), 1);
+    assert_eq!(pcb.vias.len(), 1);
+    let project = inspect_kicad_project(vec![pcb], "rev-a/pcb");
+    let review = review_pcb_dfm_dfa_dft(&project, ManufacturingProfile::Jlcpcb);
+    assert_eq!(review.status, Status::Pass, "{:#?}", review.findings);
+    assert_eq!(review.metrics["copper_layers"], 2);
+    assert!(
+        review
+            .checks
+            .iter()
+            .any(|check| check.id == "pcb_dfm_outline")
+    );
 }

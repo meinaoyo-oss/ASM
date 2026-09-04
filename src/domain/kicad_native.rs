@@ -39,6 +39,24 @@ pub struct KicadPad {
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct KicadTrack {
+    pub start: KicadPoint,
+    pub end: KicadPoint,
+    pub width: Option<f64>,
+    pub layer: Option<String>,
+    pub net_code: Option<i64>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct KicadVia {
+    pub point: KicadPoint,
+    pub size: Option<f64>,
+    pub drill: Option<f64>,
+    pub layers: Vec<String>,
+    pub net_code: Option<i64>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct KicadPoint {
     pub x: f64,
     pub y: f64,
@@ -99,6 +117,9 @@ pub struct KicadDocument {
     pub junctions: Vec<KicadPoint>,
     pub no_connects: Vec<KicadPoint>,
     pub pins: Vec<KicadPin>,
+    pub board_outline: Vec<KicadWire>,
+    pub tracks: Vec<KicadTrack>,
+    pub vias: Vec<KicadVia>,
     pub check: CheckResult,
 }
 
@@ -201,6 +222,11 @@ pub fn parse_kicad_document(
     } else {
         (Vec::new(), Vec::new(), Vec::new(), Vec::new())
     };
+    let (board_outline, tracks, vias) = if kind == KicadDocumentKind::Pcb {
+        collect_pcb_geometry(&root)
+    } else {
+        (Vec::new(), Vec::new(), Vec::new())
+    };
     components.sort_by(|left, right| left.reference.cmp(&right.reference));
     nets.sort_by(|left, right| left.name.cmp(&right.name));
     let mut check = CheckResult::new(
@@ -302,6 +328,9 @@ pub fn parse_kicad_document(
         junctions,
         no_connects,
         pins,
+        board_outline,
+        tracks,
+        vias,
         check,
     })
 }
@@ -1074,10 +1103,14 @@ fn collect_document_data(
                 nets.push(net);
             }
         }
-        (KicadDocumentKind::Pcb, "layer") => {
-            let name = string_at(items.get(2)).or_else(|| string_at(items.get(1)));
-            if let Some(name) = name {
-                layers.insert(name.to_owned());
+        (KicadDocumentKind::Pcb, "layers") => {
+            for layer in items.iter().skip(1) {
+                let Some(layer_items) = layer.as_list() else {
+                    continue;
+                };
+                if let Some(name) = string_at(layer_items.get(1)) {
+                    layers.insert(name.to_owned());
+                }
             }
         }
         (KicadDocumentKind::Schematic, "symbol") => {
@@ -1099,6 +1132,67 @@ fn collect_document_data(
     }
     for child in items.iter().skip(1) {
         collect_document_data(child, kind, components, nets, labels, layers);
+    }
+}
+
+fn collect_pcb_geometry(root: &SExpr) -> (Vec<KicadWire>, Vec<KicadTrack>, Vec<KicadVia>) {
+    let mut outline = Vec::new();
+    let mut tracks = Vec::new();
+    let mut vias = Vec::new();
+    collect_pcb_geometry_recursive(root, &mut outline, &mut tracks, &mut vias);
+    (outline, tracks, vias)
+}
+
+fn collect_pcb_geometry_recursive(
+    node: &SExpr,
+    outline: &mut Vec<KicadWire>,
+    tracks: &mut Vec<KicadTrack>,
+    vias: &mut Vec<KicadVia>,
+) {
+    let Some(items) = node.as_list() else { return };
+    match atom(items.first()) {
+        "gr_line" => {
+            let layer = find_direct_string(node, "layer");
+            if layer
+                .as_deref()
+                .is_some_and(|value| value.eq_ignore_ascii_case("Edge.Cuts"))
+                && let (Some(start), Some(end)) = (
+                    find_direct_point(node, "start"),
+                    find_direct_point(node, "end"),
+                )
+            {
+                outline.push(KicadWire { start, end });
+            }
+        }
+        "segment" => {
+            if let (Some(start), Some(end)) = (
+                find_direct_point(node, "start"),
+                find_direct_point(node, "end"),
+            ) {
+                tracks.push(KicadTrack {
+                    start,
+                    end,
+                    width: find_direct_number(node, "width"),
+                    layer: find_direct_string(node, "layer"),
+                    net_code: find_direct_integer(node, "net"),
+                });
+            }
+        }
+        "via" => {
+            if let Some(point) = find_direct_point(node, "at") {
+                vias.push(KicadVia {
+                    point,
+                    size: find_direct_number(node, "size"),
+                    drill: find_direct_number(node, "drill"),
+                    layers: find_direct_strings(node, "layers"),
+                    net_code: find_direct_integer(node, "net"),
+                });
+            }
+        }
+        _ => {}
+    }
+    for child in items.iter().skip(1) {
+        collect_pcb_geometry_recursive(child, outline, tracks, vias);
     }
 }
 
@@ -1305,26 +1399,30 @@ fn parse_schematic_symbol(node: &SExpr) -> Option<KicadComponent> {
 
 fn collect_pcb_pads(node: &SExpr) -> Vec<KicadPad> {
     let mut pads = Vec::new();
-    collect_pcb_pads_recursive(node, &mut pads);
+    collect_pcb_pads_recursive(node, parse_transform(node), &mut pads);
     pads
 }
 
-fn collect_pcb_pads_recursive(node: &SExpr, output: &mut Vec<KicadPad>) {
+fn collect_pcb_pads_recursive(
+    node: &SExpr,
+    transform: SymbolTransform,
+    output: &mut Vec<KicadPad>,
+) {
     let Some(items) = node.as_list() else { return };
     if atom(items.first()) == "pad"
         && let Some(number) = string_at(items.get(1))
     {
-        let (x, y) = parse_at(node);
+        let point = find_direct_point(node, "at").map(|point| transform_point(&point, transform));
         let net = find_direct_net_name(node);
         output.push(KicadPad {
             number: number.to_owned(),
             net,
-            x,
-            y,
+            x: point.as_ref().map(|point| point.x),
+            y: point.as_ref().map(|point| point.y),
         });
     }
     for child in items.iter().skip(1) {
-        collect_pcb_pads_recursive(child, output);
+        collect_pcb_pads_recursive(child, transform, output);
     }
 }
 
@@ -1576,6 +1674,43 @@ fn find_direct_string(node: &SExpr, head: &str) -> Option<String> {
             .then(|| string_at(child_items.get(1)).map(str::to_owned))
             .flatten()
     })
+}
+
+fn find_direct_number(node: &SExpr, head: &str) -> Option<f64> {
+    find_direct_string(node, head).and_then(|value| value.parse().ok())
+}
+
+fn find_direct_integer(node: &SExpr, head: &str) -> Option<i64> {
+    let items = node.as_list()?;
+    items.iter().skip(1).find_map(|child| {
+        let values = child.as_list()?;
+        (atom(values.first()) == head)
+            .then(|| atom_opt(values.get(1)).and_then(|value| value.parse().ok()))
+            .flatten()
+    })
+}
+
+fn find_direct_strings(node: &SExpr, head: &str) -> Vec<String> {
+    let Some(items) = node.as_list() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .skip(1)
+        .find_map(|child| {
+            let values = child.as_list()?;
+            if atom(values.first()) != head {
+                return None;
+            }
+            Some(
+                values
+                    .iter()
+                    .skip(1)
+                    .filter_map(|value| string_at(Some(value)).map(str::to_owned))
+                    .collect(),
+            )
+        })
+        .unwrap_or_default()
 }
 
 fn find_direct_value(node: &SExpr, head: &str) -> Option<String> {

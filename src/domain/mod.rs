@@ -7,6 +7,7 @@ mod bom;
 mod bom_risk;
 mod gerber;
 mod ipc2581;
+mod kicad_fabrication;
 mod kicad_native;
 mod kicad_review;
 mod package;
@@ -26,12 +27,14 @@ pub use gerber::{
     validate_gerber_set,
 };
 pub use ipc2581::{Ipc2581Validation, validate_ipc2581};
+pub use kicad_fabrication::{DfmThresholds, PcbDfmDfaDftReview, review_pcb_dfm_dfa_dft};
 pub use kicad_native::{
     KicadComponent, KicadConnectivity, KicadConnectivityNet, KicadConsistencyReport, KicadDocument,
     KicadDocumentKind, KicadLabel, KicadNet, KicadPad, KicadPin, KicadPinPadMismatch, KicadPoint,
-    KicadPowerTree, KicadProjectSnapshot, KicadRevisionDiff, KicadSignalTrace, KicadWire,
-    analyze_kicad_connectivity, compare_kicad_revisions, compare_kicad_schematic_pcb,
-    inspect_kicad_project, parse_kicad_document, review_kicad_power_tree, trace_kicad_signal,
+    KicadPowerTree, KicadProjectSnapshot, KicadRevisionDiff, KicadSignalTrace, KicadTrack,
+    KicadVia, KicadWire, analyze_kicad_connectivity, compare_kicad_revisions,
+    compare_kicad_schematic_pcb, inspect_kicad_project, parse_kicad_document,
+    review_kicad_power_tree, trace_kicad_signal,
 };
 pub use kicad_review::{KicadDesignReview, review_kicad_design};
 pub use package::{

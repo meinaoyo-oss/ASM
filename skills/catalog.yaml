@@ -39,6 +39,14 @@ skills:
     invocation: automatic
     read_only: true
     sources: [kicad-happy, easyeda-mcp-pro, eda-agent]
+  - id: review-pcb-dfm-dfa-dft
+    name: PCB DFM/DFA/DFT 预检
+    category: pcb-design
+    path: skills/pcb-design/review-pcb-dfm-dfa-dft
+    mcp_coverage: full
+    invocation: automatic
+    read_only: true
+    sources: [kicad-happy, easyeda-mcp-pro, eda-agent]
   - id: verify-datasheet-evidence
     name: 数据手册证据核验
     category: component-data

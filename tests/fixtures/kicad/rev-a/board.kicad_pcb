@@ -11,6 +11,12 @@
   (net 0 "")
   (net 1 "GND")
   (net 2 "VCC_3V3")
+  (gr_line (start 0 0) (end 40 0) (stroke (width 0.05) (type default)) (layer "Edge.Cuts"))
+  (gr_line (start 40 0) (end 40 40) (stroke (width 0.05) (type default)) (layer "Edge.Cuts"))
+  (gr_line (start 40 40) (end 0 40) (stroke (width 0.05) (type default)) (layer "Edge.Cuts"))
+  (gr_line (start 0 40) (end 0 0) (stroke (width 0.05) (type default)) (layer "Edge.Cuts"))
+  (segment (start 10 20) (end 20 20) (width 0.2) (layer "F.Cu") (net 2))
+  (via (at 15 20) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 2))
   (footprint "Resistor_SMD:R_0603_1608Metric"
     (layer "F.Cu")
     (at 10 20)
