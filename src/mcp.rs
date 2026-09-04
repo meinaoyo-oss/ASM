@@ -624,7 +624,7 @@ impl ElectronicsMcp {
 
 #[tool_handler(
     name = "electronics-manufacturing-mcp",
-    version = "0.1.0",
+    version = "0.2.0",
     instructions = "只读分析工程电子制造文件、需求追溯、BOM 风险、SPICE 网表和 PCB 制造发布包。工具结果不是制造放行、法规认证或人工批准。"
 )]
 impl ServerHandler for ElectronicsMcp {}

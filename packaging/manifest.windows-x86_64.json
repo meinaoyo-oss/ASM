@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "electronics-manufacturing-mcp",
   "name": "工程电子制造 MCP",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "platform": "windows-x86_64",
   "transport": "stdio",
   "command": {
@@ -20,4 +20,3 @@
   },
   "integrity": "SHA256SUMS.txt"
 }
-
