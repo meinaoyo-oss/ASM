@@ -136,6 +136,7 @@ jobs:
           (cd dist && sha256sum -c SHA256SUMS.txt)
           linux_archive="$(find dist -maxdepth 1 -name '*-linux-x86_64.tar.gz' -print -quit)"
           linux_root="$(tar -tzf "$linux_archive" | sed -n '1s#^\([^/]*/\).*#\1#p')"
+          linux_root="${linux_root%/}"
           tar -xOf "$linux_archive" "$linux_root/SHA256SUMS.txt" |
             while read -r expected relative; do
               relative="${relative#./}"
@@ -144,6 +145,7 @@ jobs:
             done
           windows_archive="$(find dist -maxdepth 1 -name '*-windows-x86_64.zip' -print -quit)"
           windows_root="$(unzip -Z1 "$windows_archive" | sed -n '1s#^\([^/]*/\).*#\1#p')"
+          windows_root="${windows_root%/}"
           unzip -t "$windows_archive" >/dev/null
           unzip -p "$windows_archive" "$windows_root/SHA256SUMS.txt" |
             while read -r expected relative; do
