@@ -25,7 +25,7 @@ electronics-manufacturing-mcp serve --config config/default.toml
 
 1. 在 GitHub 新建空仓库，将本目录提交并推送到 `main` 或 `master`。不要提交 `target/`；本地 `dist/` 归档也可以不提交，Actions 会重新生成。
 2. 打开仓库的 **Actions** 页面，选择 **CI**。第一次运行时如果 GitHub 要求启用 Actions，选择允许工作流运行。
-3. `Quality and tests` job 会执行 `cargo fmt`、Clippy、Rust 测试、Skills frontmatter/catalog 检查和 UTF-8 无 BOM 检查。
+3. `Quality and tests` job 会使用 stable Rust 执行 `cargo fmt`、Clippy、Rust 测试、Skills frontmatter/catalog 检查和 UTF-8 无 BOM 检查；项目的最低 Rust 版本仍由 `Cargo.toml` 的 `rust-version = 1.88` 声明。
 4. `Build side-load packages` 只有在质量 job 通过后才执行。它会在 Ubuntu runner 安装 musl/MinGW，构建 Linux 静态二进制和 Windows x64 `.exe`，校验归档内外 SHA-256，并上传 artifact。
 5. 在成功的工作流运行页面底部下载 `electronics-manufacturing-mcp-<commit>` artifact。里面包含两个侧载包和 `SHA256SUMS.txt`；解压后按包内 `manifest.json` 注册到你的通用 Agent。
 
