@@ -146,6 +146,9 @@ pub struct GerberGeometry {
     pub regions: Vec<GerberRegion>,
     pub flashes: Vec<GerberPoint>,
     pub apertures: Vec<GerberAperture>,
+    pub polarity: String,
+    pub polarity_events: Vec<String>,
+    pub aperture_macro_count: usize,
     pub step_repeat_instances: u64,
     pub bounds: Option<GerberBounds>,
     pub check: CheckResult,
@@ -439,8 +442,21 @@ pub fn parse_gerber_geometry(
     let mut region_segments = Vec::new();
     let mut flashes = Vec::new();
     let mut step_repeat_instances = 1_u64;
+    let mut polarity = "dark".to_owned();
+    let mut polarity_events = Vec::new();
+    let mut aperture_macro_count = 0_usize;
     for command in document.commands() {
         match command {
+            Command::ExtendedCode(ExtendedCode::LoadPolarity(value)) => {
+                polarity = match value {
+                    gerber_parser::gerber_types::Polarity::Dark => "dark".to_owned(),
+                    gerber_parser::gerber_types::Polarity::Clear => "clear".to_owned(),
+                };
+                polarity_events.push(polarity.clone());
+            }
+            Command::ExtendedCode(ExtendedCode::ApertureMacro(_)) => {
+                aperture_macro_count += 1;
+            }
             Command::FunctionCode(FunctionCode::GCode(GCode::RegionMode(enabled))) => {
                 if *enabled {
                     region_open = true;
@@ -576,6 +592,9 @@ pub fn parse_gerber_geometry(
         regions,
         flashes,
         apertures,
+        polarity,
+        polarity_events,
+        aperture_macro_count,
         step_repeat_instances,
         bounds,
         check,

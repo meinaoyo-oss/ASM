@@ -54,6 +54,9 @@ pub struct GerberGeometrySummary {
     pub region_count: usize,
     pub flash_count: usize,
     pub aperture_count: usize,
+    pub aperture_macro_count: usize,
+    pub polarity: String,
+    pub polarity_event_count: usize,
     pub step_repeat_instances: u64,
     pub bounds: Option<GeometryBounds>,
 }
@@ -105,6 +108,9 @@ pub fn review_release_geometry(
                         region_count: geometry.regions.len(),
                         flash_count: geometry.flashes.len(),
                         aperture_count: geometry.apertures.len(),
+                        aperture_macro_count: geometry.aperture_macro_count,
+                        polarity: geometry.polarity,
+                        polarity_event_count: geometry.polarity_events.len(),
                         step_repeat_instances: geometry.step_repeat_instances,
                         bounds: geometry.bounds.map(GeometryBounds::from),
                     });
@@ -384,7 +390,16 @@ fn merge_geometry(
         return Some(next.clone());
     };
     current.segments.extend(next.segments.clone());
+    current.arcs.extend(next.arcs.clone());
+    current.regions.extend(next.regions.clone());
     current.flashes.extend(next.flashes.clone());
+    current.apertures.extend(next.apertures.clone());
+    current.polarity = next.polarity.clone();
+    current.polarity_events.extend(next.polarity_events.clone());
+    current.aperture_macro_count += next.aperture_macro_count;
+    current.step_repeat_instances = current
+        .step_repeat_instances
+        .max(next.step_repeat_instances);
     current.bounds = gerber_geometry_bounds(&current.segments, &current.flashes);
     Some(current)
 }

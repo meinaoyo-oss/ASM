@@ -28,9 +28,9 @@ pub use geometry::{
     review_release_geometry,
 };
 pub use gerber::{
-    ExcellonValidation, GerberBounds, GerberFileResult, GerberGeometry, GerberPoint, GerberSegment,
-    GerberValidation, PcbFileRole, classify_pcb_file, parse_gerber_geometry, validate_excellon,
-    validate_gerber_set,
+    ExcellonValidation, GerberAperture, GerberArc, GerberBounds, GerberFileResult, GerberGeometry,
+    GerberPoint, GerberRegion, GerberSegment, GerberValidation, PcbFileRole, classify_pcb_file,
+    parse_gerber_geometry, validate_excellon, validate_gerber_set,
 };
 pub use ipc2581::{Ipc2581Validation, validate_ipc2581};
 pub use kicad_fabrication::{DfmThresholds, PcbDfmDfaDftReview, review_pcb_dfm_dfa_dft};
