@@ -167,3 +167,47 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/SHA256SUMS.txt
+
+  release:
+    name: Publish GitHub Release
+    needs: packages
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download side-load packages
+        uses: actions/download-artifact@v4
+        with:
+          name: electronics-manufacturing-mcp-${{ github.sha }}
+          path: release-assets
+
+      - name: Check release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          linux_asset="$(find release-assets -type f -name '*.tar.gz' -print -quit)"
+          windows_asset="$(find release-assets -type f -name '*.zip' -print -quit)"
+          checksums="$(find release-assets -type f -name 'SHA256SUMS.txt' -print -quit)"
+          test -n "$linux_asset"
+          test -n "$windows_asset"
+          test -n "$checksums"
+          (cd "$(dirname "$checksums")" && sha256sum -c "$(basename "$checksums")")
+          printf 'linux=%s\nwindows=%s\nchecksums=%s\n' "$linux_asset" "$windows_asset" "$checksums"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          linux_asset="$(find release-assets -type f -name '*.tar.gz' -print -quit)"
+          windows_asset="$(find release-assets -type f -name '*.zip' -print -quit)"
+          checksums="$(find release-assets -type f -name 'SHA256SUMS.txt' -print -quit)"
+          gh release create "$GITHUB_REF_NAME" \
+            "$linux_asset" \
+            "$windows_asset" \
+            "$checksums" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "electronics-manufacturing-mcp $GITHUB_REF_NAME" \
+            --generate-notes

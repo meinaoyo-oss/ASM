@@ -28,6 +28,14 @@ electronics-manufacturing-mcp serve --config config/default.toml
 3. `Quality and tests` job 会使用 stable Rust 执行 `cargo fmt`、Clippy、Rust 测试、Skills frontmatter/catalog 检查和 UTF-8 无 BOM 检查；项目的最低 Rust 版本仍由 `Cargo.toml` 的 `rust-version = 1.88` 声明。
 4. `Build side-load packages` 只有在质量 job 通过后才执行。它会在 Ubuntu runner 安装 musl/MinGW，构建 Linux 静态二进制和 Windows x64 `.exe`，校验归档内外 SHA-256，并上传 artifact。
 5. 在成功的工作流运行页面底部下载 `electronics-manufacturing-mcp-<commit>` artifact。里面包含两个侧载包和 `SHA256SUMS.txt`；解压后按包内 `manifest.json` 注册到你的通用 Agent。
+6. 发布正式版本时，先确认 `Cargo.toml` 版本号，再创建并推送对应标签。质量和打包 Job 成功后，`Publish GitHub Release` 会自动创建 Release 并上传两个侧载包和校验文件：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+标签必须符合 `v主版本.次版本.修订版本`，例如 `v0.1.0`。同一个标签重复运行会因为 Release 已存在而失败；修改后请使用新的版本号和标签。
 
 本地可先复现质量 job：
 
