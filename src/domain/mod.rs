@@ -5,6 +5,7 @@
 
 mod bom;
 mod bom_risk;
+mod geometry;
 mod gerber;
 mod ipc2581;
 mod kicad_fabrication;
@@ -22,8 +23,13 @@ pub use bom::{
     compare_bom_cpl, parse_bom, parse_cpl, validate_bom,
 };
 pub use bom_risk::{BomRisk, BomRiskReport, review_bom_risk};
+pub use geometry::{
+    GeometryBounds, GeometryComparison, GeometryConsistencyReview, GerberGeometrySummary,
+    review_release_geometry,
+};
 pub use gerber::{
-    ExcellonValidation, GerberValidation, PcbFileRole, classify_pcb_file, validate_excellon,
+    ExcellonValidation, GerberBounds, GerberFileResult, GerberGeometry, GerberPoint, GerberSegment,
+    GerberValidation, PcbFileRole, classify_pcb_file, parse_gerber_geometry, validate_excellon,
     validate_gerber_set,
 };
 pub use ipc2581::{Ipc2581Validation, validate_ipc2581};

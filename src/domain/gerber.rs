@@ -89,6 +89,37 @@ pub struct ExcellonValidation {
     pub source: String,
     pub tool_count: usize,
     pub coordinate_count: usize,
+    pub holes: Vec<GerberPoint>,
+    pub check: CheckResult,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct GerberPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct GerberSegment {
+    pub start: GerberPoint,
+    pub end: GerberPoint,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct GerberBounds {
+    pub min_x: f64,
+    pub max_x: f64,
+    pub min_y: f64,
+    pub max_y: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct GerberGeometry {
+    pub source: String,
+    pub unit: String,
+    pub segments: Vec<GerberSegment>,
+    pub flashes: Vec<GerberPoint>,
+    pub bounds: Option<GerberBounds>,
     pub check: CheckResult,
 }
 
@@ -322,6 +353,10 @@ pub fn validate_excellon(bytes: &[u8], source: impl Into<String>) -> ExcellonVal
             trimmed.starts_with('X') || (trimmed.starts_with('Y') && trimmed.contains('X'))
         })
         .count();
+    let holes = text
+        .lines()
+        .filter_map(parse_excellon_point)
+        .collect::<Vec<_>>();
     if tool_count == 0 {
         check.add(
             Finding::new(
@@ -346,8 +381,154 @@ pub fn validate_excellon(bytes: &[u8], source: impl Into<String>) -> ExcellonVal
         source,
         tool_count,
         coordinate_count,
+        holes,
         check,
     }
+}
+
+pub fn parse_gerber_geometry(
+    bytes: &[u8],
+    source: impl Into<String>,
+) -> Result<GerberGeometry, super::types::DomainError> {
+    use gerber_parser::gerber_types::{
+        Command, DCode, ExtendedCode, FunctionCode, Operation, Unit,
+    };
+
+    let source = source.into();
+    let document =
+        gerber_parser::parse(BufReader::new(Cursor::new(bytes))).map_err(|(_, error)| {
+            super::types::DomainError::InvalidInput(format!("Gerber parser failed: {error}"))
+        })?;
+    let (unit_name, unit_scale) = match document.units.unwrap_or(Unit::Millimeters) {
+        Unit::Inches => ("inches", 25.4),
+        Unit::Millimeters => ("millimeters", 1.0),
+    };
+    let mut current = None;
+    let mut segments = Vec::new();
+    let mut flashes = Vec::new();
+    for command in document.commands() {
+        let operation = match command {
+            Command::FunctionCode(FunctionCode::DCode(DCode::Operation(operation))) => operation,
+            Command::ExtendedCode(ExtendedCode::Unit(_)) => continue,
+            _ => continue,
+        };
+        let (coordinates, operation_kind) = match operation {
+            Operation::Interpolate(coordinates, _) => (coordinates, "segment"),
+            Operation::Move(coordinates) => (coordinates, "move"),
+            Operation::Flash(coordinates) => (coordinates, "flash"),
+        };
+        let Some(point) =
+            gerber_coordinates_to_point(coordinates.as_ref(), current.as_ref(), unit_scale)
+        else {
+            continue;
+        };
+        match operation_kind {
+            "segment" => {
+                if let Some(start) = current.clone() {
+                    segments.push(GerberSegment {
+                        start,
+                        end: point.clone(),
+                    });
+                }
+            }
+            "flash" => flashes.push(point.clone()),
+            _ => {}
+        }
+        current = Some(point);
+    }
+    let mut check = CheckResult::new("gerber_geometry", "extracted Gerber coordinate geometry");
+    for error in document.errors() {
+        check.add(
+            Finding::new(
+                "GERBER_GEOMETRY_PARSE_ERROR",
+                Severity::Error,
+                format!("Gerber geometry contains parser error: {error}"),
+            )
+            .at_path(source.clone()),
+        );
+    }
+    if segments.is_empty() && flashes.is_empty() {
+        check.add(
+            Finding::new(
+                "GERBER_NO_GEOMETRY",
+                Severity::Warning,
+                "Gerber file contains no coordinate segments or flashes",
+            )
+            .at_path(source.clone()),
+        );
+    }
+    let bounds = gerber_geometry_bounds(&segments, &flashes);
+    Ok(GerberGeometry {
+        source,
+        unit: unit_name.to_owned(),
+        segments,
+        flashes,
+        bounds,
+        check,
+    })
+}
+
+fn gerber_coordinates_to_point(
+    coordinates: Option<&gerber_parser::gerber_types::Coordinates>,
+    current: Option<&GerberPoint>,
+    unit_scale: f64,
+) -> Option<GerberPoint> {
+    let coordinates = coordinates?;
+    let x = coordinates
+        .x
+        .map(f64::from)
+        .or_else(|| current.map(|point| point.x / unit_scale))?
+        * unit_scale;
+    let y = coordinates
+        .y
+        .map(f64::from)
+        .or_else(|| current.map(|point| point.y / unit_scale))?
+        * unit_scale;
+    Some(GerberPoint { x, y })
+}
+
+fn gerber_geometry_bounds(
+    segments: &[GerberSegment],
+    flashes: &[GerberPoint],
+) -> Option<GerberBounds> {
+    let mut points = segments
+        .iter()
+        .flat_map(|segment| [&segment.start, &segment.end])
+        .chain(flashes.iter());
+    let first = points.next()?;
+    let mut bounds = GerberBounds {
+        min_x: first.x,
+        max_x: first.x,
+        min_y: first.y,
+        max_y: first.y,
+    };
+    for point in points {
+        bounds.min_x = bounds.min_x.min(point.x);
+        bounds.max_x = bounds.max_x.max(point.x);
+        bounds.min_y = bounds.min_y.min(point.y);
+        bounds.max_y = bounds.max_y.max(point.y);
+    }
+    Some(bounds)
+}
+
+fn parse_excellon_point(line: &str) -> Option<GerberPoint> {
+    let line = line.trim().to_ascii_uppercase();
+    if !line.contains('X') || !line.contains('Y') {
+        return None;
+    }
+    let x_start = line.find('X')? + 1;
+    let y_start = line.find('Y')? + 1;
+    let x_end = line[x_start..]
+        .find(['Y', 'I', 'J'])
+        .map(|offset| x_start + offset)
+        .unwrap_or(y_start - 1);
+    let y_end = line[y_start..]
+        .find(['X', 'I', 'J'])
+        .map(|offset| y_start + offset)
+        .unwrap_or(line.len());
+    let x = line[x_start..x_end].parse::<f64>().ok()?;
+    let y = line[y_start..y_end].parse::<f64>().ok()?;
+    Some(GerberPoint { x, y })
 }
 
 fn validate_gerber_file(bytes: &[u8], source: &str) -> CheckResult {

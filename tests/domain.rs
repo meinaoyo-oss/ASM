@@ -4,11 +4,11 @@ use electronics_manufacturing_mcp::domain::{
     ManufacturingProfile, PackageLimits, ReleaseKind, ReleaseRequest, Severity, Status,
     analyze_kicad_connectivity, analyze_requirement_impact, build_traceability_matrix,
     classify_pcb_file, compare_bom_cpl, compare_kicad_revisions, compare_kicad_schematic_pcb,
-    inspect_kicad_project, inspect_package, parse_bom, parse_cpl, parse_kicad_document,
-    parse_requirements, parse_trace_links, review_bom_risk, review_kicad_design,
-    review_kicad_power_tree, review_pcb_dfm_dfa_dft, review_requirement_quality,
-    trace_kicad_signal, validate_gerber_set, validate_ipc2581, validate_release,
-    validate_spice_netlist,
+    inspect_kicad_project, inspect_package, parse_bom, parse_cpl, parse_gerber_geometry,
+    parse_kicad_document, parse_requirements, parse_trace_links, review_bom_risk,
+    review_kicad_design, review_kicad_power_tree, review_pcb_dfm_dfa_dft, review_release_geometry,
+    review_requirement_quality, trace_kicad_signal, validate_gerber_set, validate_ipc2581,
+    validate_release, validate_spice_netlist,
 };
 
 fn fixture(path: &str) -> PathBuf {
@@ -518,4 +518,38 @@ fn pcb_dfm_review_checks_outline_tracks_vias_and_edge_clearance() {
             .iter()
             .any(|check| check.id == "pcb_dfm_outline")
     );
+}
+
+#[test]
+fn gerber_geometry_is_parsed_and_outline_drift_is_reported() {
+    let pcb_path = fixture("kicad/rev-a/board.kicad_pcb");
+    let outline_path = fixture("valid_assembly/board.gko");
+    let pcb = parse_kicad_document(
+        &fs::read(&pcb_path).unwrap(),
+        pcb_path.display().to_string(),
+    )
+    .unwrap();
+    let geometry = parse_gerber_geometry(
+        &fs::read(&outline_path).unwrap(),
+        outline_path.display().to_string(),
+    )
+    .unwrap();
+    assert!(!geometry.segments.is_empty());
+    assert!(geometry.bounds.is_some());
+    let project = inspect_kicad_project(vec![pcb], "geometry");
+    let review = review_release_geometry(
+        project.documents.iter().find(|document| {
+            document.kind == electronics_manufacturing_mcp::domain::KicadDocumentKind::Pcb
+        }),
+        &[("board.gko".to_owned(), fs::read(outline_path).unwrap())],
+        ManufacturingProfile::Generic,
+        "geometry",
+    );
+    assert!(
+        review
+            .findings
+            .iter()
+            .any(|finding| finding.code == "GEOMETRY_OUTLINE_DRIFT")
+    );
+    assert_eq!(review.status, Status::Fail);
 }

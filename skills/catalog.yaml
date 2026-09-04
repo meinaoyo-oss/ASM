@@ -47,6 +47,14 @@ skills:
     invocation: automatic
     read_only: true
     sources: [kicad-happy, easyeda-mcp-pro, eda-agent]
+  - id: review-release-geometry
+    name: 发布几何一致性
+    category: pcb-design
+    path: skills/pcb-design/review-release-geometry
+    mcp_coverage: partial
+    invocation: automatic
+    read_only: true
+    sources: [kicad-happy, easyeda-mcp-pro, eda-agent]
   - id: verify-datasheet-evidence
     name: 数据手册证据核验
     category: component-data

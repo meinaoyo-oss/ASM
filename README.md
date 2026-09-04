@@ -19,7 +19,7 @@ electronics-manufacturing-mcp serve --config config/default.toml
 
 当前 MCP 工具分为四组：
 
-- PCB/EDA：`kicad_inspect_design`、`kicad_semantic_review`、`kicad_design_review`、`kicad_connectivity_review`、`kicad_schematic_pcb_consistency`、`kicad_power_tree_review`、`kicad_trace_signal`、`kicad_compare_revisions`、`pcb_dfm_dfa_dft_review`、`pcb_inspect_package`、`pcb_validate_bom`、`pcb_compare_bom_cpl`、`pcb_validate_gerber_set`、`pcb_validate_ipc2581`、`pcb_validate_release`、`pcb_run_kicad_checks`。
+- PCB/EDA：`kicad_inspect_design`、`kicad_semantic_review`、`kicad_design_review`、`kicad_connectivity_review`、`kicad_schematic_pcb_consistency`、`kicad_power_tree_review`、`kicad_trace_signal`、`kicad_compare_revisions`、`pcb_dfm_dfa_dft_review`、`pcb_geometry_consistency_review`、`pcb_inspect_package`、`pcb_validate_bom`、`pcb_compare_bom_cpl`、`pcb_validate_gerber_set`、`pcb_validate_ipc2581`、`pcb_validate_release`、`pcb_run_kicad_checks`。
 - 需求与追溯：`requirements_ingest`、`requirements_quality_review`、`requirements_traceability`、`requirements_change_impact`。
 - 物料风险：`bom_review_risk`，只基于 BOM 中的生命周期、制造商、供应商和替代料字段，不联网查询库存。
 - 仿真准备：`spice_validate_netlist`，检查网表结构，不启动 ngspice/LTspice。

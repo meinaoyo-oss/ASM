@@ -25,9 +25,9 @@ use crate::{
         compare_kicad_revisions, compare_kicad_schematic_pcb, inspect_kicad_project,
         inspect_package, parse_bom, parse_cpl, parse_kicad_document, parse_requirements,
         parse_trace_links, read_package_member, review_bom_risk, review_kicad_design,
-        review_kicad_power_tree, review_pcb_dfm_dfa_dft, review_requirement_quality,
-        trace_kicad_signal, validate_bom, validate_gerber_set, validate_ipc2581, validate_release,
-        validate_spice_netlist,
+        review_kicad_power_tree, review_pcb_dfm_dfa_dft, review_release_geometry,
+        review_requirement_quality, trace_kicad_signal, validate_bom, validate_gerber_set,
+        validate_ipc2581, validate_release, validate_spice_netlist,
     },
     kicad::run_kicad_checks,
 };
@@ -247,6 +247,17 @@ pub struct PcbDfmParams {
     pub profile: ManufacturingProfile,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GeometryReviewParams {
+    /// KiCad 工程目录、.kicad_pro 或 .kicad_pcb 路径。
+    pub pcb_path: String,
+    /// Gerber/Excellon 发布目录或 ZIP 路径。
+    pub release_path: String,
+    /// 通用或 JLCPCB 预检 profile。
+    #[serde(default)]
+    pub profile: ManufacturingProfile,
+}
+
 #[tool_router]
 impl ElectronicsMcp {
     pub fn new(config: AppConfig) -> Self {
@@ -268,6 +279,7 @@ impl ElectronicsMcp {
             "cross_domain_tools": ["kicad_schematic_pcb_consistency"],
             "kicad_review_tools": ["kicad_design_review"],
             "manufacturing_review_tools": ["pcb_dfm_dfa_dft_review"],
+            "cross_domain_geometry_tools": ["pcb_geometry_consistency_review"],
             "network": false,
             "source_files_read_only": true,
             "allowed_roots": self.config.filesystem.allowed_roots,
@@ -741,6 +753,44 @@ impl ElectronicsMcp {
             }
             Err(error) => ToolEnvelope::failure("PCB_DFM_REVIEW_FAILED", error),
         })
+    }
+
+    #[tool(
+        description = "交叉核对 KiCad PCB 与 Gerber/Excellon 发布几何：板框边界、铜层数、钻孔数量、焊盘和阻焊闪点证据。"
+    )]
+    fn pcb_geometry_consistency_review(
+        &self,
+        Parameters(params): Parameters<GeometryReviewParams>,
+    ) -> Json<ToolEnvelope> {
+        Json(
+            match self
+                .read_kicad_project(&params.pcb_path)
+                .and_then(|project| {
+                    let (artifacts, files) = self.load_package_files(&params.release_path)?;
+                    let pcb = project
+                        .documents
+                        .iter()
+                        .find(|document| document.kind == crate::domain::KicadDocumentKind::Pcb);
+                    let review = review_release_geometry(
+                        pcb,
+                        &files,
+                        params.profile,
+                        params.release_path.clone(),
+                    );
+                    Ok((artifacts, review))
+                }) {
+                Ok((artifacts, review)) => ToolEnvelope::success(
+                    format!(
+                        "PCB/制造几何一致性检查完成：{} 个发现项",
+                        review.findings.len()
+                    ),
+                    review.checks.clone(),
+                    artifacts,
+                    &review,
+                ),
+                Err(error) => ToolEnvelope::failure("PCB_GEOMETRY_CONSISTENCY_FAILED", error),
+            },
+        )
     }
 
     fn package_limits(&self) -> PackageLimits {
