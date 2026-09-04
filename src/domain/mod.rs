@@ -26,11 +26,11 @@ pub use gerber::{
 };
 pub use ipc2581::{Ipc2581Validation, validate_ipc2581};
 pub use kicad_native::{
-    KicadComponent, KicadConnectivity, KicadConnectivityNet, KicadDocument, KicadDocumentKind,
-    KicadLabel, KicadNet, KicadPin, KicadPoint, KicadPowerTree, KicadProjectSnapshot,
-    KicadRevisionDiff, KicadSignalTrace, KicadWire, analyze_kicad_connectivity,
-    compare_kicad_revisions, inspect_kicad_project, parse_kicad_document, review_kicad_power_tree,
-    trace_kicad_signal,
+    KicadComponent, KicadConnectivity, KicadConnectivityNet, KicadConsistencyReport, KicadDocument,
+    KicadDocumentKind, KicadLabel, KicadNet, KicadPad, KicadPin, KicadPinPadMismatch, KicadPoint,
+    KicadPowerTree, KicadProjectSnapshot, KicadRevisionDiff, KicadSignalTrace, KicadWire,
+    analyze_kicad_connectivity, compare_kicad_revisions, compare_kicad_schematic_pcb,
+    inspect_kicad_project, parse_kicad_document, review_kicad_power_tree, trace_kicad_signal,
 };
 pub use package::{
     PackageInventory, PackageKind, PackageLimits, inspect_package, read_package_member,

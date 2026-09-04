@@ -3,11 +3,11 @@ use std::{fs, io::Write, path::PathBuf};
 use electronics_manufacturing_mcp::domain::{
     ManufacturingProfile, PackageLimits, ReleaseKind, ReleaseRequest, Severity, Status,
     analyze_kicad_connectivity, analyze_requirement_impact, build_traceability_matrix,
-    classify_pcb_file, compare_bom_cpl, compare_kicad_revisions, inspect_kicad_project,
-    inspect_package, parse_bom, parse_cpl, parse_kicad_document, parse_requirements,
-    parse_trace_links, review_bom_risk, review_kicad_power_tree, review_requirement_quality,
-    trace_kicad_signal, validate_gerber_set, validate_ipc2581, validate_release,
-    validate_spice_netlist,
+    classify_pcb_file, compare_bom_cpl, compare_kicad_revisions, compare_kicad_schematic_pcb,
+    inspect_kicad_project, inspect_package, parse_bom, parse_cpl, parse_kicad_document,
+    parse_requirements, parse_trace_links, review_bom_risk, review_kicad_power_tree,
+    review_requirement_quality, trace_kicad_signal, validate_gerber_set, validate_ipc2581,
+    validate_release, validate_spice_netlist,
 };
 
 fn fixture(path: &str) -> PathBuf {
@@ -431,4 +431,33 @@ fn library_symbol_pin_rotation_is_applied() {
     let point = document.pins[0].point.as_ref().unwrap();
     assert!((point.x - 7.46).abs() < 1e-6);
     assert!((point.y - 10.0).abs() < 1e-6);
+}
+
+#[test]
+fn schematic_pcb_consistency_compares_components_pads_and_labelled_nets() {
+    let pcb_path = fixture("kicad/rev-a/board.kicad_pcb");
+    let sch_path = fixture("kicad/rev-a/board.kicad_sch");
+    let pcb = parse_kicad_document(
+        &fs::read(&pcb_path).unwrap(),
+        pcb_path.display().to_string(),
+    )
+    .unwrap();
+    let sch = parse_kicad_document(
+        &fs::read(&sch_path).unwrap(),
+        sch_path.display().to_string(),
+    )
+    .unwrap();
+    let project = inspect_kicad_project(vec![pcb, sch], "rev-a");
+    let report = compare_kicad_schematic_pcb(&project);
+    assert!(report.missing_on_pcb.is_empty());
+    assert!(report.footprint_drift.is_empty());
+    assert!(report.net_drift.is_empty());
+    assert!(
+        report
+            .check
+            .findings
+            .iter()
+            .any(|finding| finding.code == "KICAD_PAD_MISSING_PIN")
+    );
+    assert_eq!(report.check.status, Status::Warn);
 }

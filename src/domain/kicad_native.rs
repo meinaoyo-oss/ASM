@@ -21,12 +21,21 @@ pub struct KicadComponent {
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub layer: Option<String>,
+    pub pads: Vec<KicadPad>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct KicadNet {
     pub code: Option<i64>,
     pub name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct KicadPad {
+    pub number: String,
+    pub net: Option<String>,
+    pub x: Option<f64>,
+    pub y: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
@@ -131,6 +140,27 @@ pub struct KicadRevisionDiff {
     pub added_nets: Vec<String>,
     pub removed_nets: Vec<String>,
     pub check: CheckResult,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct KicadConsistencyReport {
+    pub schematic_source: Option<String>,
+    pub pcb_source: Option<String>,
+    pub missing_on_pcb: Vec<String>,
+    pub missing_in_schematic: Vec<String>,
+    pub pin_pad_mismatches: Vec<KicadPinPadMismatch>,
+    pub footprint_drift: Vec<String>,
+    pub net_drift: Vec<String>,
+    pub check: CheckResult,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct KicadPinPadMismatch {
+    pub reference: String,
+    pub pin_number: String,
+    pub schematic_net: Option<String>,
+    pub pcb_net: Option<String>,
+    pub kind: String,
 }
 
 pub fn parse_kicad_document(
@@ -616,6 +646,232 @@ pub fn inspect_kicad_project(
     }
 }
 
+pub fn compare_kicad_schematic_pcb(project: &KicadProjectSnapshot) -> KicadConsistencyReport {
+    let schematic = project
+        .documents
+        .iter()
+        .find(|document| document.kind == KicadDocumentKind::Schematic);
+    let pcb = project
+        .documents
+        .iter()
+        .find(|document| document.kind == KicadDocumentKind::Pcb);
+    let mut check = CheckResult::new(
+        "kicad_schematic_pcb_consistency",
+        "compared schematic symbols to PCB footprints and pads",
+    );
+    let empty_report = |check: CheckResult| KicadConsistencyReport {
+        schematic_source: schematic.map(|document| document.source.clone()),
+        pcb_source: pcb.map(|document| document.source.clone()),
+        missing_on_pcb: Vec::new(),
+        missing_in_schematic: Vec::new(),
+        pin_pad_mismatches: Vec::new(),
+        footprint_drift: Vec::new(),
+        net_drift: Vec::new(),
+        check,
+    };
+    let Some(schematic) = schematic else {
+        check.status = Status::Skipped;
+        check.summary = "no schematic document was available for cross-check".to_owned();
+        return empty_report(check);
+    };
+    let Some(pcb) = pcb else {
+        check.status = Status::Skipped;
+        check.summary = "no PCB document was available for cross-check".to_owned();
+        return empty_report(check);
+    };
+
+    let schematic_components = component_map_for_document(schematic);
+    let pcb_components = component_map_for_document(pcb);
+    let missing_on_pcb = schematic_components
+        .keys()
+        .filter(|reference| !pcb_components.contains_key(*reference))
+        .cloned()
+        .collect::<Vec<_>>();
+    let missing_in_schematic = pcb_components
+        .keys()
+        .filter(|reference| !schematic_components.contains_key(*reference))
+        .cloned()
+        .collect::<Vec<_>>();
+    for reference in &missing_on_pcb {
+        check.add(
+            Finding::new(
+                "KICAD_COMPONENT_MISSING_ON_PCB",
+                Severity::Error,
+                "schematic component is absent from PCB footprints",
+            )
+            .with_detail("reference", reference.clone()),
+        );
+    }
+    for reference in &missing_in_schematic {
+        check.add(
+            Finding::new(
+                "KICAD_COMPONENT_MISSING_IN_SCHEMATIC",
+                Severity::Warning,
+                "PCB footprint has no matching schematic component",
+            )
+            .with_detail("reference", reference.clone()),
+        );
+    }
+
+    let mut footprint_drift = Vec::new();
+    for reference in schematic_components
+        .keys()
+        .filter(|reference| pcb_components.contains_key(*reference))
+    {
+        let schematic_footprint = schematic_components[reference].footprint.as_deref();
+        let pcb_footprint = pcb_components[reference].footprint.as_deref();
+        if let (Some(schematic_footprint), Some(pcb_footprint)) =
+            (schematic_footprint, pcb_footprint)
+            && !schematic_footprint.eq_ignore_ascii_case(pcb_footprint)
+        {
+            footprint_drift.push(reference.clone());
+            check.add(
+                Finding::new(
+                    "KICAD_FOOTPRINT_DRIFT",
+                    Severity::Error,
+                    "schematic footprint property differs from PCB footprint",
+                )
+                .with_detail("reference", reference.clone())
+                .with_detail("schematic", schematic_footprint)
+                .with_detail("pcb", pcb_footprint),
+            );
+        }
+    }
+
+    let connectivity = analyze_kicad_connectivity(schematic);
+    let mut schematic_pin_nets = BTreeMap::<(String, String), String>::new();
+    for net in &connectivity.nets {
+        let Some(label) = net.labels.first() else {
+            continue;
+        };
+        for pin in &net.pins {
+            if let Some(reference) = &pin.reference {
+                schematic_pin_nets.insert(
+                    (
+                        reference.to_ascii_uppercase(),
+                        pin.number.to_ascii_uppercase(),
+                    ),
+                    label.clone(),
+                );
+            }
+        }
+    }
+    let mut pin_pad_mismatches = Vec::new();
+    let mut net_drift = Vec::new();
+    for reference in schematic_components
+        .keys()
+        .filter(|reference| pcb_components.contains_key(*reference))
+    {
+        let schematic_pins = schematic
+            .pins
+            .iter()
+            .filter(|pin| {
+                pin.reference
+                    .as_deref()
+                    .is_some_and(|value| value.eq_ignore_ascii_case(reference))
+            })
+            .map(|pin| pin.number.to_ascii_uppercase())
+            .collect::<BTreeSet<_>>();
+        let pcb_pads = pcb_components[reference]
+            .pads
+            .iter()
+            .map(|pad| pad.number.to_ascii_uppercase())
+            .collect::<BTreeSet<_>>();
+        for pin_number in schematic_pins.difference(&pcb_pads) {
+            pin_pad_mismatches.push(KicadPinPadMismatch {
+                reference: reference.clone(),
+                pin_number: pin_number.clone(),
+                schematic_net: None,
+                pcb_net: None,
+                kind: "missing_pad".to_owned(),
+            });
+            check.add(
+                Finding::new(
+                    "KICAD_PIN_MISSING_PAD",
+                    Severity::Error,
+                    "schematic pin has no matching PCB pad",
+                )
+                .with_detail("reference", reference.clone())
+                .with_detail("pin", pin_number.clone()),
+            );
+        }
+        for pad_number in pcb_pads.difference(&schematic_pins) {
+            check.add(
+                Finding::new(
+                    "KICAD_PAD_MISSING_PIN",
+                    Severity::Warning,
+                    "PCB pad has no matching schematic pin",
+                )
+                .with_detail("reference", reference.clone())
+                .with_detail("pad", pad_number.clone()),
+            );
+        }
+        for pad in &pcb_components[reference].pads {
+            let key = (
+                reference.to_ascii_uppercase(),
+                pad.number.to_ascii_uppercase(),
+            );
+            let Some(expected_net) = schematic_pin_nets.get(&key) else {
+                continue;
+            };
+            match pad.net.as_deref() {
+                None => {
+                    net_drift.push(format!("{}:{}", reference, pad.number));
+                    pin_pad_mismatches.push(KicadPinPadMismatch {
+                        reference: reference.clone(),
+                        pin_number: pad.number.clone(),
+                        schematic_net: Some(expected_net.clone()),
+                        pcb_net: None,
+                        kind: "missing_pcb_net".to_owned(),
+                    });
+                    check.add(
+                        Finding::new(
+                            "KICAD_PAD_MISSING_NET",
+                            Severity::Error,
+                            "PCB pad has no net while schematic pin has a labelled net",
+                        )
+                        .with_detail("reference", reference.clone())
+                        .with_detail("pad", pad.number.clone())
+                        .with_detail("schematic_net", expected_net.clone()),
+                    );
+                }
+                Some(actual_net) if !expected_net.eq_ignore_ascii_case(actual_net) => {
+                    net_drift.push(format!("{}:{}", reference, pad.number));
+                    pin_pad_mismatches.push(KicadPinPadMismatch {
+                        reference: reference.clone(),
+                        pin_number: pad.number.clone(),
+                        schematic_net: Some(expected_net.clone()),
+                        pcb_net: Some(actual_net.to_owned()),
+                        kind: "net_mismatch".to_owned(),
+                    });
+                    check.add(
+                        Finding::new(
+                            "KICAD_PIN_PAD_NET_MISMATCH",
+                            Severity::Error,
+                            "schematic pin net differs from PCB pad net",
+                        )
+                        .with_detail("reference", reference.clone())
+                        .with_detail("pad", pad.number.clone())
+                        .with_detail("schematic_net", expected_net.clone())
+                        .with_detail("pcb_net", actual_net),
+                    );
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    KicadConsistencyReport {
+        schematic_source: Some(schematic.source.clone()),
+        pcb_source: Some(pcb.source.clone()),
+        missing_on_pcb,
+        missing_in_schematic,
+        pin_pad_mismatches,
+        footprint_drift,
+        net_drift,
+        check,
+    }
+}
+
 pub fn trace_kicad_signal(project: &KicadProjectSnapshot, query: &str) -> KicadSignalTrace {
     let query = query.trim().to_owned();
     let needle = query.to_ascii_lowercase();
@@ -1015,6 +1271,7 @@ fn parse_pcb_footprint(node: &SExpr) -> Option<KicadComponent> {
         .as_list()
         .and_then(|items| string_at(items.get(1)))
         .map(str::to_owned);
+    let pads = collect_pcb_pads(node);
     (!reference.is_empty()).then_some(KicadComponent {
         reference,
         value,
@@ -1023,6 +1280,7 @@ fn parse_pcb_footprint(node: &SExpr) -> Option<KicadComponent> {
         x,
         y,
         layer,
+        pads,
     })
 }
 
@@ -1041,6 +1299,42 @@ fn parse_schematic_symbol(node: &SExpr) -> Option<KicadComponent> {
         x,
         y,
         layer: None,
+        pads: Vec::new(),
+    })
+}
+
+fn collect_pcb_pads(node: &SExpr) -> Vec<KicadPad> {
+    let mut pads = Vec::new();
+    collect_pcb_pads_recursive(node, &mut pads);
+    pads
+}
+
+fn collect_pcb_pads_recursive(node: &SExpr, output: &mut Vec<KicadPad>) {
+    let Some(items) = node.as_list() else { return };
+    if atom(items.first()) == "pad"
+        && let Some(number) = string_at(items.get(1))
+    {
+        let (x, y) = parse_at(node);
+        let net = find_direct_net_name(node);
+        output.push(KicadPad {
+            number: number.to_owned(),
+            net,
+            x,
+            y,
+        });
+    }
+    for child in items.iter().skip(1) {
+        collect_pcb_pads_recursive(child, output);
+    }
+}
+
+fn find_direct_net_name(node: &SExpr) -> Option<String> {
+    let items = node.as_list()?;
+    items.iter().skip(1).find_map(|child| {
+        let values = child.as_list()?;
+        (atom(values.first()) == "net")
+            .then(|| string_at(values.get(2)).map(str::to_owned))
+            .flatten()
     })
 }
 
@@ -1359,6 +1653,17 @@ fn component_map(project: &KicadProjectSnapshot) -> BTreeMap<String, KicadCompon
             .or_insert_with(|| component.clone());
     }
     result
+}
+
+fn component_map_for_document(document: &KicadDocument) -> BTreeMap<String, KicadComponent> {
+    document
+        .components
+        .iter()
+        .filter_map(|component| {
+            let reference = component.reference.trim().to_ascii_uppercase();
+            (!reference.is_empty()).then_some((reference, component.clone()))
+        })
+        .collect()
 }
 
 fn optional_changed(left: &Option<String>, right: &Option<String>) -> bool {

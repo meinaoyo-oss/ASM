@@ -22,11 +22,11 @@ use crate::{
         Artifact, CheckResult, Finding, ManufacturingProfile, PackageLimits, ReleaseKind,
         ReleaseReport, ReleaseRequest, Severity, Status, analyze_kicad_connectivity,
         analyze_requirement_impact, build_traceability_matrix, classify_pcb_file, compare_bom_cpl,
-        compare_kicad_revisions, inspect_kicad_project, inspect_package, parse_bom, parse_cpl,
-        parse_kicad_document, parse_requirements, parse_trace_links, read_package_member,
-        review_bom_risk, review_kicad_power_tree, review_requirement_quality, trace_kicad_signal,
-        validate_bom, validate_gerber_set, validate_ipc2581, validate_release,
-        validate_spice_netlist,
+        compare_kicad_revisions, compare_kicad_schematic_pcb, inspect_kicad_project,
+        inspect_package, parse_bom, parse_cpl, parse_kicad_document, parse_requirements,
+        parse_trace_links, read_package_member, review_bom_risk, review_kicad_power_tree,
+        review_requirement_quality, trace_kicad_signal, validate_bom, validate_gerber_set,
+        validate_ipc2581, validate_release, validate_spice_netlist,
     },
     kicad::run_kicad_checks,
 };
@@ -255,6 +255,7 @@ impl ElectronicsMcp {
             "workflow_tools": ["requirements_ingest", "requirements_quality_review", "requirements_traceability", "requirements_change_impact", "bom_review_risk", "spice_validate_netlist"],
             "kicad_native_tools": ["kicad_inspect_design", "kicad_semantic_review", "kicad_power_tree_review", "kicad_trace_signal", "kicad_compare_revisions"],
             "kicad_connectivity_tools": ["kicad_connectivity_review"],
+            "cross_domain_tools": ["kicad_schematic_pcb_consistency"],
             "network": false,
             "source_files_read_only": true,
             "allowed_roots": self.config.filesystem.allowed_roots,
@@ -599,6 +600,27 @@ impl ElectronicsMcp {
                 )
             }
             Err(error) => ToolEnvelope::failure("KICAD_CONNECTIVITY_REVIEW_FAILED", error),
+        })
+    }
+
+    #[tool(
+        description = "交叉核对 KiCad 原理图与 PCB 的元件集合、封装、pin/pad 编号及带标签网络。"
+    )]
+    fn kicad_schematic_pcb_consistency(
+        &self,
+        Parameters(params): Parameters<KicadDesignParams>,
+    ) -> Json<ToolEnvelope> {
+        Json(match self.read_kicad_project(&params.path) {
+            Ok(project) => {
+                let consistency = compare_kicad_schematic_pcb(&project);
+                ToolEnvelope::success(
+                    "KiCad 原理图与 PCB 一致性检查完成",
+                    vec![project.check.clone(), consistency.check.clone()],
+                    Vec::new(),
+                    &json!({ "project": project, "consistency": consistency }),
+                )
+            }
+            Err(error) => ToolEnvelope::failure("KICAD_SCHEMATIC_PCB_CHECK_FAILED", error),
         })
     }
 
