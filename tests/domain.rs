@@ -5,9 +5,9 @@ use electronics_manufacturing_mcp::domain::{
     analyze_kicad_connectivity, analyze_requirement_impact, build_traceability_matrix,
     classify_pcb_file, compare_bom_cpl, compare_kicad_revisions, compare_kicad_schematic_pcb,
     inspect_kicad_project, inspect_package, parse_bom, parse_cpl, parse_kicad_document,
-    parse_requirements, parse_trace_links, review_bom_risk, review_kicad_power_tree,
-    review_requirement_quality, trace_kicad_signal, validate_gerber_set, validate_ipc2581,
-    validate_release, validate_spice_netlist,
+    parse_requirements, parse_trace_links, review_bom_risk, review_kicad_design,
+    review_kicad_power_tree, review_requirement_quality, trace_kicad_signal, validate_gerber_set,
+    validate_ipc2581, validate_release, validate_spice_netlist,
 };
 
 fn fixture(path: &str) -> PathBuf {
@@ -460,4 +460,42 @@ fn schematic_pcb_consistency_compares_components_pads_and_labelled_nets() {
             .any(|finding| finding.code == "KICAD_PAD_MISSING_PIN")
     );
     assert_eq!(report.check.status, Status::Warn);
+}
+
+#[test]
+fn kicad_design_review_aggregates_rule_checks() {
+    let pcb_path = fixture("kicad/rev-a/board.kicad_pcb");
+    let sch_path = fixture("kicad/rev-a/board.kicad_sch");
+    let pcb = parse_kicad_document(
+        &fs::read(&pcb_path).unwrap(),
+        pcb_path.display().to_string(),
+    )
+    .unwrap();
+    let sch = parse_kicad_document(
+        &fs::read(&sch_path).unwrap(),
+        sch_path.display().to_string(),
+    )
+    .unwrap();
+    let project = inspect_kicad_project(vec![pcb, sch], "rev-a");
+    let review = review_kicad_design(&project);
+    assert!(review.metrics.contains_key("schematic_wires"));
+    assert!(
+        review
+            .checks
+            .iter()
+            .any(|check| check.id == "kicad_interfaces")
+    );
+    assert!(
+        review
+            .checks
+            .iter()
+            .any(|check| check.id == "kicad_clock_reset")
+    );
+    assert!(
+        review
+            .checks
+            .iter()
+            .any(|check| check.id == "kicad_power_evidence")
+    );
+    assert_eq!(review.status, Status::Warn);
 }

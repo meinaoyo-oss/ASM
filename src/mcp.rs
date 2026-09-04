@@ -24,9 +24,9 @@ use crate::{
         analyze_requirement_impact, build_traceability_matrix, classify_pcb_file, compare_bom_cpl,
         compare_kicad_revisions, compare_kicad_schematic_pcb, inspect_kicad_project,
         inspect_package, parse_bom, parse_cpl, parse_kicad_document, parse_requirements,
-        parse_trace_links, read_package_member, review_bom_risk, review_kicad_power_tree,
-        review_requirement_quality, trace_kicad_signal, validate_bom, validate_gerber_set,
-        validate_ipc2581, validate_release, validate_spice_netlist,
+        parse_trace_links, read_package_member, review_bom_risk, review_kicad_design,
+        review_kicad_power_tree, review_requirement_quality, trace_kicad_signal, validate_bom,
+        validate_gerber_set, validate_ipc2581, validate_release, validate_spice_netlist,
     },
     kicad::run_kicad_checks,
 };
@@ -256,6 +256,7 @@ impl ElectronicsMcp {
             "kicad_native_tools": ["kicad_inspect_design", "kicad_semantic_review", "kicad_power_tree_review", "kicad_trace_signal", "kicad_compare_revisions"],
             "kicad_connectivity_tools": ["kicad_connectivity_review"],
             "cross_domain_tools": ["kicad_schematic_pcb_consistency"],
+            "kicad_review_tools": ["kicad_design_review"],
             "network": false,
             "source_files_read_only": true,
             "allowed_roots": self.config.filesystem.allowed_roots,
@@ -621,6 +622,27 @@ impl ElectronicsMcp {
                 )
             }
             Err(error) => ToolEnvelope::failure("KICAD_SCHEMATIC_PCB_CHECK_FAILED", error),
+        })
+    }
+
+    #[tool(
+        description = "运行 KiCad 综合设计审查：元件合同、电源、连通性、时钟/复位和常见接口命名规则。"
+    )]
+    fn kicad_design_review(
+        &self,
+        Parameters(params): Parameters<KicadDesignParams>,
+    ) -> Json<ToolEnvelope> {
+        Json(match self.read_kicad_project(&params.path) {
+            Ok(project) => {
+                let review = review_kicad_design(&project);
+                ToolEnvelope::success(
+                    format!("KiCad 综合设计审查完成：{} 个发现项", review.findings.len()),
+                    review.checks.clone(),
+                    Vec::new(),
+                    &review,
+                )
+            }
+            Err(error) => ToolEnvelope::failure("KICAD_DESIGN_REVIEW_FAILED", error),
         })
     }
 

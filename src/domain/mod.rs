@@ -8,6 +8,7 @@ mod bom_risk;
 mod gerber;
 mod ipc2581;
 mod kicad_native;
+mod kicad_review;
 mod package;
 mod profile;
 mod release;
@@ -32,6 +33,7 @@ pub use kicad_native::{
     analyze_kicad_connectivity, compare_kicad_revisions, compare_kicad_schematic_pcb,
     inspect_kicad_project, parse_kicad_document, review_kicad_power_tree, trace_kicad_signal,
 };
+pub use kicad_review::{KicadDesignReview, review_kicad_design};
 pub use package::{
     PackageInventory, PackageKind, PackageLimits, inspect_package, read_package_member,
 };
