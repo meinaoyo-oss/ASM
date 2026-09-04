@@ -106,6 +106,30 @@ pub struct GerberSegment {
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct GerberArc {
+    pub start: GerberPoint,
+    pub end: GerberPoint,
+    pub offset: GerberPoint,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct GerberRegion {
+    pub segments: Vec<GerberSegment>,
+    pub closed: bool,
+    pub bounds: Option<GerberBounds>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct GerberAperture {
+    pub code: i32,
+    pub shape: String,
+    pub x_mm: Option<f64>,
+    pub y_mm: Option<f64>,
+    pub hole_mm: Option<f64>,
+    pub vertices: Option<u8>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct GerberBounds {
     pub min_x: f64,
     pub max_x: f64,
@@ -118,7 +142,11 @@ pub struct GerberGeometry {
     pub source: String,
     pub unit: String,
     pub segments: Vec<GerberSegment>,
+    pub arcs: Vec<GerberArc>,
+    pub regions: Vec<GerberRegion>,
     pub flashes: Vec<GerberPoint>,
+    pub apertures: Vec<GerberAperture>,
+    pub step_repeat_instances: u64,
     pub bounds: Option<GerberBounds>,
     pub check: CheckResult,
 }
@@ -391,7 +419,7 @@ pub fn parse_gerber_geometry(
     source: impl Into<String>,
 ) -> Result<GerberGeometry, super::types::DomainError> {
     use gerber_parser::gerber_types::{
-        Command, DCode, ExtendedCode, FunctionCode, Operation, Unit,
+        Command, DCode, ExtendedCode, FunctionCode, GCode, Operation, StepAndRepeat, Unit,
     };
 
     let source = source.into();
@@ -405,17 +433,49 @@ pub fn parse_gerber_geometry(
     };
     let mut current = None;
     let mut segments = Vec::new();
+    let mut arcs = Vec::new();
+    let mut regions = Vec::new();
+    let mut region_open = false;
+    let mut region_segments = Vec::new();
     let mut flashes = Vec::new();
+    let mut step_repeat_instances = 1_u64;
     for command in document.commands() {
+        match command {
+            Command::FunctionCode(FunctionCode::GCode(GCode::RegionMode(enabled))) => {
+                if *enabled {
+                    region_open = true;
+                    region_segments.clear();
+                } else if region_open {
+                    let region_segments_finished = std::mem::take(&mut region_segments);
+                    let closed = is_closed_segment_chain(&region_segments_finished);
+                    regions.push(GerberRegion {
+                        bounds: gerber_geometry_bounds(&region_segments_finished, &[]),
+                        segments: region_segments_finished,
+                        closed,
+                    });
+                    region_open = false;
+                }
+            }
+            Command::ExtendedCode(ExtendedCode::StepAndRepeat(StepAndRepeat::Open {
+                repeat_x,
+                repeat_y,
+                ..
+            })) => {
+                step_repeat_instances =
+                    step_repeat_instances.max(*repeat_x as u64 * *repeat_y as u64);
+            }
+            _ => {}
+        }
         let operation = match command {
             Command::FunctionCode(FunctionCode::DCode(DCode::Operation(operation))) => operation,
-            Command::ExtendedCode(ExtendedCode::Unit(_)) => continue,
             _ => continue,
         };
-        let (coordinates, operation_kind) = match operation {
-            Operation::Interpolate(coordinates, _) => (coordinates, "segment"),
-            Operation::Move(coordinates) => (coordinates, "move"),
-            Operation::Flash(coordinates) => (coordinates, "flash"),
+        let (coordinates, operation_kind, offset) = match operation {
+            Operation::Interpolate(coordinates, offset) => {
+                (coordinates, "segment", offset.as_ref())
+            }
+            Operation::Move(coordinates) => (coordinates, "move", None),
+            Operation::Flash(coordinates) => (coordinates, "flash", None),
         };
         let Some(point) =
             gerber_coordinates_to_point(coordinates.as_ref(), current.as_ref(), unit_scale)
@@ -425,9 +485,23 @@ pub fn parse_gerber_geometry(
         match operation_kind {
             "segment" => {
                 if let Some(start) = current.clone() {
-                    segments.push(GerberSegment {
+                    let segment = GerberSegment {
                         start,
                         end: point.clone(),
+                    };
+                    if region_open {
+                        region_segments.push(segment.clone());
+                    }
+                    segments.push(segment);
+                }
+                if let (Some(start), Some(offset)) = (
+                    current.clone(),
+                    coordinates_offset_to_point(offset, unit_scale),
+                ) {
+                    arcs.push(GerberArc {
+                        start,
+                        end: point.clone(),
+                        offset,
                     });
                 }
             }
@@ -435,6 +509,14 @@ pub fn parse_gerber_geometry(
             _ => {}
         }
         current = Some(point);
+    }
+    if region_open {
+        let region_segments_finished = std::mem::take(&mut region_segments);
+        regions.push(GerberRegion {
+            bounds: gerber_geometry_bounds(&region_segments_finished, &[]),
+            closed: false,
+            segments: region_segments_finished,
+        });
     }
     let mut check = CheckResult::new("gerber_geometry", "extracted Gerber coordinate geometry");
     for error in document.errors() {
@@ -457,15 +539,119 @@ pub fn parse_gerber_geometry(
             .at_path(source.clone()),
         );
     }
+    for region in &regions {
+        if !region.closed {
+            check.add(
+                Finding::new(
+                    "GERBER_REGION_OPEN",
+                    Severity::Error,
+                    "Gerber region contour is not closed",
+                )
+                .at_path(source.clone()),
+            );
+        }
+    }
+    let mut apertures = document
+        .apertures
+        .iter()
+        .map(|(code, aperture)| aperture_to_model(*code, aperture, unit_scale))
+        .collect::<Vec<_>>();
+    apertures.sort_by_key(|aperture| aperture.code);
+    if apertures.is_empty() && !flashes.is_empty() {
+        check.add(
+            Finding::new(
+                "GERBER_APERTURES_MISSING",
+                Severity::Error,
+                "Gerber has flashes but no parsed aperture definitions",
+            )
+            .at_path(source.clone()),
+        );
+    }
     let bounds = gerber_geometry_bounds(&segments, &flashes);
     Ok(GerberGeometry {
         source,
         unit: unit_name.to_owned(),
         segments,
+        arcs,
+        regions,
         flashes,
+        apertures,
+        step_repeat_instances,
         bounds,
         check,
     })
+}
+
+fn coordinates_offset_to_point(
+    offset: Option<&gerber_parser::gerber_types::CoordinateOffset>,
+    unit_scale: f64,
+) -> Option<GerberPoint> {
+    let offset = offset?;
+    Some(GerberPoint {
+        x: offset.x.map(f64::from).unwrap_or_default() * unit_scale,
+        y: offset.y.map(f64::from).unwrap_or_default() * unit_scale,
+    })
+}
+
+fn is_closed_segment_chain(segments: &[GerberSegment]) -> bool {
+    let (Some(first), Some(last)) = (segments.first(), segments.last()) else {
+        return false;
+    };
+    points_equal(&first.start, &last.end)
+}
+
+fn points_equal(left: &GerberPoint, right: &GerberPoint) -> bool {
+    (left.x - right.x).abs() <= 1e-6 && (left.y - right.y).abs() <= 1e-6
+}
+
+fn aperture_to_model(
+    code: i32,
+    aperture: &gerber_parser::gerber_types::Aperture,
+    unit_scale: f64,
+) -> GerberAperture {
+    use gerber_parser::gerber_types::Aperture;
+    match aperture {
+        Aperture::Circle(circle) => GerberAperture {
+            code,
+            shape: "circle".to_owned(),
+            x_mm: Some(circle.diameter * unit_scale),
+            y_mm: None,
+            hole_mm: circle.hole_diameter.map(|value| value * unit_scale),
+            vertices: None,
+        },
+        Aperture::Rectangle(rectangle) => GerberAperture {
+            code,
+            shape: "rectangle".to_owned(),
+            x_mm: Some(rectangle.x * unit_scale),
+            y_mm: Some(rectangle.y * unit_scale),
+            hole_mm: rectangle.hole_diameter.map(|value| value * unit_scale),
+            vertices: None,
+        },
+        Aperture::Obround(rectangle) => GerberAperture {
+            code,
+            shape: "obround".to_owned(),
+            x_mm: Some(rectangle.x * unit_scale),
+            y_mm: Some(rectangle.y * unit_scale),
+            hole_mm: rectangle.hole_diameter.map(|value| value * unit_scale),
+            vertices: None,
+        },
+        Aperture::Polygon(polygon) => GerberAperture {
+            code,
+            shape: "polygon".to_owned(),
+            x_mm: Some(polygon.diameter * unit_scale),
+            y_mm: None,
+            hole_mm: polygon.hole_diameter.map(|value| value * unit_scale),
+            vertices: Some(polygon.vertices),
+        },
+        Aperture::Macro(name, _) => GerberAperture {
+            code,
+            shape: format!("macro:{name}"),
+            x_mm: None,
+            y_mm: None,
+            hole_mm: None,
+            vertices: None,
+        },
+    }
 }
 
 fn gerber_coordinates_to_point(

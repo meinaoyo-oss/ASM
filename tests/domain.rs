@@ -553,3 +553,15 @@ fn gerber_geometry_is_parsed_and_outline_drift_is_reported() {
     );
     assert_eq!(review.status, Status::Fail);
 }
+
+#[test]
+fn gerber_geometry_preserves_regions_arcs_apertures_and_step_repeat() {
+    let gerber = b"%FSLAX24Y24*%\n%MOMM*%\n%ADD10C,0.200*%\nD10*\n%SRX2Y1I40J0*%\nX000000Y000000D02*\nG36*\nX100000Y000000D01*\nX100000Y100000D01*\nX000000Y100000D01*\nX000000Y000000D01*\nG37*\n%SR%\nG02*\nX100000Y000000I50000J00000D01*\nM02*\n";
+    let geometry = parse_gerber_geometry(gerber, "complex.gko").unwrap();
+    assert_eq!(geometry.apertures.len(), 1);
+    assert_eq!(geometry.apertures[0].shape, "circle");
+    assert_eq!(geometry.step_repeat_instances, 2);
+    assert_eq!(geometry.regions.len(), 1);
+    assert!(geometry.regions[0].closed);
+    assert_eq!(geometry.arcs.len(), 1);
+}

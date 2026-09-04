@@ -19,6 +19,7 @@ pub struct GeometryConsistencyReview {
     pub pcb_via_count: usize,
     pub drill_hole_count: usize,
     pub pcb_pad_count: usize,
+    pub soldermask_file_count: usize,
     pub soldermask_flash_count: usize,
     pub outline: GeometryComparison,
     pub gerber_files: Vec<GerberGeometrySummary>,
@@ -49,7 +50,11 @@ pub struct GerberGeometrySummary {
     pub role: PcbFileRole,
     pub unit: String,
     pub segment_count: usize,
+    pub arc_count: usize,
+    pub region_count: usize,
     pub flash_count: usize,
+    pub aperture_count: usize,
+    pub step_repeat_instances: u64,
     pub bounds: Option<GeometryBounds>,
 }
 
@@ -65,6 +70,7 @@ pub fn review_release_geometry(
     let mut outline_geometry = None;
     let mut gerber_copper_layers = 0;
     let mut soldermask_flash_count = 0;
+    let mut soldermask_file_count = 0;
     let mut drill_hole_count = 0;
     let mut geometry_errors = Vec::new();
     for (path, bytes) in files {
@@ -86,6 +92,7 @@ pub fn review_release_geometry(
                         role,
                         PcbFileRole::GerberSolderMaskTop | PcbFileRole::GerberSolderMaskBottom
                     ) {
+                        soldermask_file_count += 1;
                         soldermask_flash_count += geometry.flashes.len();
                     }
                     geometry_errors.extend(geometry.check.findings.clone());
@@ -94,7 +101,11 @@ pub fn review_release_geometry(
                         role,
                         unit: geometry.unit,
                         segment_count: geometry.segments.len(),
+                        arc_count: geometry.arcs.len(),
+                        region_count: geometry.regions.len(),
                         flash_count: geometry.flashes.len(),
+                        aperture_count: geometry.apertures.len(),
+                        step_repeat_instances: geometry.step_repeat_instances,
                         bounds: geometry.bounds.map(GeometryBounds::from),
                     });
                 }
@@ -145,8 +156,8 @@ pub fn review_release_geometry(
     checks.push(check_drill_consistency(pcb_via_count, drill_hole_count));
     checks.push(check_pad_evidence(
         pcb_pad_count,
+        soldermask_file_count,
         soldermask_flash_count,
-        gerber_files.len(),
     ));
 
     let pcb_bounds = pcb.and_then(outline_bounds).map(GeometryBounds::from);
@@ -208,6 +219,7 @@ pub fn review_release_geometry(
         pcb_via_count,
         drill_hole_count,
         pcb_pad_count,
+        soldermask_file_count,
         soldermask_flash_count,
         outline: GeometryComparison {
             pcb_bounds,
@@ -276,20 +288,26 @@ fn check_drill_consistency(pcb_vias: usize, drill_holes: usize) -> CheckResult {
 
 fn check_pad_evidence(
     pads: usize,
+    soldermask_files: usize,
     soldermask_flashes: usize,
-    gerber_file_count: usize,
 ) -> CheckResult {
     let mut check = CheckResult::new(
         "geometry_pads",
         "reviewed pad and soldermask geometry evidence",
     );
-    if pads > 0 && gerber_file_count > 0 && soldermask_flashes == 0 {
+    if pads > 0 && soldermask_files == 0 {
+        check.add(Finding::new(
+            "GEOMETRY_SOLDERMASK_FILE_MISSING",
+            Severity::Warning,
+            "PCB has pads but no top/bottom soldermask Gerber file was supplied",
+        ));
+    } else if pads > 0 && soldermask_flashes == 0 {
         check.add(Finding::new(
             "GEOMETRY_SOLDERMASK_NO_FLASH_EVIDENCE",
             Severity::Warning,
-            "PCB has pads but soldermask Gerber has no parseable flash evidence",
+            "soldermask Gerber files exist but contain no parseable flash evidence",
         ));
-    } else if pads > 0 && soldermask_flashes > 0 && soldermask_flashes < pads {
+    } else if pads > 0 && soldermask_flashes < pads {
         check.add(
             Finding::new(
                 "GEOMETRY_SOLDERMASK_FLASH_COUNT_LOW",
