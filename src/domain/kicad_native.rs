@@ -54,6 +54,7 @@ pub struct KicadPin {
     pub name: Option<String>,
     pub electrical_type: Option<String>,
     pub point: Option<KicadPoint>,
+    pub coordinate_source: String,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
@@ -869,6 +870,7 @@ fn collect_schematic_connectivity(
         &mut no_connects,
         &mut pins,
     );
+    enrich_library_pins(root, &mut pins);
     (wires, junctions, no_connects, pins)
 }
 
@@ -983,6 +985,7 @@ fn parse_pin(node: &SExpr, reference: Option<&str>) -> Option<KicadPin> {
         name,
         electrical_type,
         point,
+        coordinate_source: "instance".to_owned(),
     })
 }
 
@@ -1025,6 +1028,7 @@ fn parse_pcb_footprint(node: &SExpr) -> Option<KicadComponent> {
 
 fn parse_schematic_symbol(node: &SExpr) -> Option<KicadComponent> {
     let library_id = find_direct_string(node, "lib_id");
+    library_id.as_ref()?;
     let reference = find_property(node, "Reference").or_else(|| find_property(node, "reference"));
     let value = find_property(node, "Value").or_else(|| find_property(node, "value"));
     let footprint = find_property(node, "Footprint").or_else(|| find_property(node, "footprint"));
@@ -1038,6 +1042,194 @@ fn parse_schematic_symbol(node: &SExpr) -> Option<KicadComponent> {
         y,
         layer: None,
     })
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SymbolTransform {
+    x: f64,
+    y: f64,
+    rotation_degrees: f64,
+    mirror_x: bool,
+    mirror_y: bool,
+}
+
+fn enrich_library_pins(root: &SExpr, pins: &mut Vec<KicadPin>) {
+    let libraries = collect_library_pin_definitions(root);
+    let instances = collect_symbol_instances(root);
+    for instance in instances {
+        let Some(reference) = instance.reference.as_deref() else {
+            continue;
+        };
+        let Some(library_id) = instance.library_id.as_deref() else {
+            continue;
+        };
+        let Some(definitions) = libraries.get(library_id) else {
+            continue;
+        };
+        let existing = pins
+            .iter()
+            .filter(|pin| pin.reference.as_deref() == Some(reference))
+            .map(|pin| pin.number.to_ascii_uppercase())
+            .collect::<BTreeSet<_>>();
+        for definition in definitions {
+            if existing.contains(&definition.number.to_ascii_uppercase()) {
+                continue;
+            }
+            let Some(point) = &definition.point else {
+                continue;
+            };
+            let point = transform_point(point, instance.transform);
+            let mut pin = definition.clone();
+            pin.reference = Some(reference.to_owned());
+            pin.point = Some(point);
+            pin.coordinate_source = "library_transform".to_owned();
+            pins.push(pin);
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SymbolInstance {
+    reference: Option<String>,
+    library_id: Option<String>,
+    transform: SymbolTransform,
+}
+
+fn collect_symbol_instances(root: &SExpr) -> Vec<SymbolInstance> {
+    let mut instances = Vec::new();
+    collect_symbol_instances_recursive(root, &mut instances);
+    instances
+}
+
+fn collect_symbol_instances_recursive(node: &SExpr, output: &mut Vec<SymbolInstance>) {
+    let Some(items) = node.as_list() else { return };
+    let head = atom(items.first());
+    if head == "lib_symbols" {
+        return;
+    }
+    if head == "symbol" {
+        let library_id = find_direct_string(node, "lib_id");
+        if library_id.is_some() {
+            output.push(SymbolInstance {
+                reference: find_property(node, "Reference"),
+                library_id,
+                transform: parse_transform(node),
+            });
+        }
+    }
+    for child in items.iter().skip(1) {
+        collect_symbol_instances_recursive(child, output);
+    }
+}
+
+fn collect_library_pin_definitions(root: &SExpr) -> BTreeMap<String, Vec<KicadPin>> {
+    let mut output = BTreeMap::new();
+    let Some(items) = root.as_list() else {
+        return output;
+    };
+    let Some(libraries) = items
+        .iter()
+        .skip(1)
+        .find(|child| list_head(child) == Some("lib_symbols"))
+    else {
+        return output;
+    };
+    let Some(library_items) = libraries.as_list() else {
+        return output;
+    };
+    for symbol in library_items.iter().skip(1) {
+        let Some(symbol_items) = symbol.as_list() else {
+            continue;
+        };
+        if atom(symbol_items.first()) != "symbol" {
+            continue;
+        }
+        let Some(name) = string_at(symbol_items.get(1)) else {
+            continue;
+        };
+        let mut pins = Vec::new();
+        collect_library_pins_recursive(symbol, &mut pins);
+        let mut seen = BTreeSet::new();
+        pins.retain(|pin| seen.insert(pin.number.to_ascii_uppercase()));
+        output.insert(name.to_owned(), pins);
+    }
+    output
+}
+
+fn collect_library_pins_recursive(node: &SExpr, output: &mut Vec<KicadPin>) {
+    let Some(items) = node.as_list() else { return };
+    if atom(items.first()) == "pin"
+        && let Some(pin) = parse_pin(node, None)
+    {
+        output.push(pin);
+    }
+    for child in items.iter().skip(1) {
+        collect_library_pins_recursive(child, output);
+    }
+}
+
+fn parse_transform(node: &SExpr) -> SymbolTransform {
+    let Some(items) = node.as_list() else {
+        return SymbolTransform {
+            x: 0.0,
+            y: 0.0,
+            rotation_degrees: 0.0,
+            mirror_x: false,
+            mirror_y: false,
+        };
+    };
+    let mut transform = SymbolTransform {
+        x: 0.0,
+        y: 0.0,
+        rotation_degrees: 0.0,
+        mirror_x: false,
+        mirror_y: false,
+    };
+    for child in items.iter().skip(1) {
+        let Some(values) = child.as_list() else {
+            continue;
+        };
+        match atom(values.first()) {
+            "at" => {
+                transform.x = atom_opt(values.get(1))
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(0.0);
+                transform.y = atom_opt(values.get(2))
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(0.0);
+                transform.rotation_degrees = atom_opt(values.get(3))
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(0.0);
+            }
+            "mirror" => match atom_opt(values.get(1))
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "x" => transform.mirror_x = true,
+                "y" => transform.mirror_y = true,
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    transform
+}
+
+fn transform_point(point: &KicadPoint, transform: SymbolTransform) -> KicadPoint {
+    let mut x = point.x;
+    let mut y = point.y;
+    if transform.mirror_x {
+        x = -x;
+    }
+    if transform.mirror_y {
+        y = -y;
+    }
+    let radians = transform.rotation_degrees.to_radians();
+    KicadPoint {
+        x: transform.x + (x * radians.cos() - y * radians.sin()),
+        y: transform.y + (x * radians.sin() + y * radians.cos()),
+    }
 }
 
 fn parse_net(node: &SExpr) -> Option<KicadNet> {

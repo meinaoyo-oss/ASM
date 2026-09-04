@@ -395,3 +395,40 @@ fn kicad_parser_preserves_utf8_properties_and_package_roles() {
     );
     assert_eq!(classify_pcb_file("filter.cir").as_str(), "spice_netlist");
 }
+
+#[test]
+fn library_symbol_pins_are_transformed_to_instance_coordinates() {
+    let document = parse_kicad_document(
+        br#"(kicad_sch
+          (lib_symbols
+            (symbol "Device:R"
+              (symbol "Device:R_0_1"
+                (pin passive line (at 0 2.54 0) (length 2.54) (name "~") (number "1")))))
+          (symbol (lib_id "Device:R") (at 10 10 0)
+            (property "Reference" "R1") (property "Value" "10k")))"#,
+        "mapped.kicad_sch",
+    )
+    .unwrap();
+    assert_eq!(document.pins.len(), 1);
+    assert_eq!(document.pins[0].coordinate_source, "library_transform");
+    assert!((document.pins[0].point.as_ref().unwrap().x - 10.0).abs() < 1e-6);
+    assert!((document.pins[0].point.as_ref().unwrap().y - 12.54).abs() < 1e-6);
+}
+
+#[test]
+fn library_symbol_pin_rotation_is_applied() {
+    let document = parse_kicad_document(
+        br#"(kicad_sch
+          (lib_symbols
+            (symbol "Device:R"
+              (symbol "Device:R_0_1"
+                (pin passive line (at 0 2.54 0) (length 2.54) (name "~") (number "1")))))
+          (symbol (lib_id "Device:R") (at 10 10 90)
+            (property "Reference" "R1") (property "Value" "10k")))"#,
+        "rotated.kicad_sch",
+    )
+    .unwrap();
+    let point = document.pins[0].point.as_ref().unwrap();
+    assert!((point.x - 7.46).abs() < 1e-6);
+    assert!((point.y - 10.0).abs() < 1e-6);
+}
