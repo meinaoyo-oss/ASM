@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::types::{CheckResult, DomainError, DomainResult, Finding, Severity};
+use super::types::{CheckResult, DomainError, DomainResult, Finding, Severity, Status};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -30,6 +30,52 @@ pub struct KicadNet {
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct KicadPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct KicadWire {
+    pub start: KicadPoint,
+    pub end: KicadPoint,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct KicadLabel {
+    pub name: String,
+    pub point: KicadPoint,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct KicadPin {
+    pub reference: Option<String>,
+    pub number: String,
+    pub name: Option<String>,
+    pub electrical_type: Option<String>,
+    pub point: Option<KicadPoint>,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct KicadConnectivityNet {
+    pub id: String,
+    pub labels: Vec<String>,
+    pub pins: Vec<KicadPin>,
+    pub wire_point_count: usize,
+    pub no_connect_count: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
+pub struct KicadConnectivity {
+    pub wire_count: usize,
+    pub junction_count: usize,
+    pub no_connect_count: usize,
+    pub pin_count: usize,
+    pub nets: Vec<KicadConnectivityNet>,
+    pub check: CheckResult,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct KicadDocument {
     pub source: String,
     pub kind: KicadDocumentKind,
@@ -37,7 +83,12 @@ pub struct KicadDocument {
     pub components: Vec<KicadComponent>,
     pub nets: Vec<KicadNet>,
     pub labels: Vec<String>,
+    pub label_points: Vec<KicadLabel>,
     pub layers: Vec<String>,
+    pub wires: Vec<KicadWire>,
+    pub junctions: Vec<KicadPoint>,
+    pub no_connects: Vec<KicadPoint>,
+    pub pins: Vec<KicadPin>,
     pub check: CheckResult,
 }
 
@@ -104,6 +155,7 @@ pub fn parse_kicad_document(
     let mut components = Vec::new();
     let mut nets = Vec::new();
     let mut labels = BTreeSet::new();
+    let mut label_points = Vec::new();
     let mut layers = BTreeSet::new();
     collect_document_data(
         &root,
@@ -113,6 +165,11 @@ pub fn parse_kicad_document(
         &mut labels,
         &mut layers,
     );
+    let (wires, junctions, no_connects, pins) = if kind == KicadDocumentKind::Schematic {
+        collect_schematic_connectivity(&root, &mut labels, &mut label_points)
+    } else {
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new())
+    };
     components.sort_by(|left, right| left.reference.cmp(&right.reference));
     nets.sort_by(|left, right| left.name.cmp(&right.name));
     let mut check = CheckResult::new(
@@ -187,7 +244,11 @@ pub fn parse_kicad_document(
             .at_path(source.clone()),
         );
     }
-    if kind == KicadDocumentKind::Schematic && nets.is_empty() && labels.is_empty() {
+    if kind == KicadDocumentKind::Schematic
+        && nets.is_empty()
+        && labels.is_empty()
+        && wires.is_empty()
+    {
         check.add(
             Finding::new(
                 "KICAD_NO_NET_EVIDENCE",
@@ -204,9 +265,291 @@ pub fn parse_kicad_document(
         components,
         nets,
         labels: labels.into_iter().collect(),
+        label_points,
         layers: layers.into_iter().collect(),
+        wires,
+        junctions,
+        no_connects,
+        pins,
         check,
     })
+}
+
+pub fn analyze_kicad_connectivity(document: &KicadDocument) -> KicadConnectivity {
+    let mut check = CheckResult::new(
+        "kicad_connectivity",
+        format!(
+            "analyzed {} wires and {} identifiable pins",
+            document.wires.len(),
+            document.pins.len()
+        ),
+    );
+    if document.kind != KicadDocumentKind::Schematic {
+        check.status = Status::Skipped;
+        check.summary = "connectivity analysis is only available for KiCad schematics".to_owned();
+        return KicadConnectivity {
+            wire_count: 0,
+            junction_count: 0,
+            no_connect_count: 0,
+            pin_count: 0,
+            nets: Vec::new(),
+            check,
+        };
+    }
+
+    let mut points = BTreeSet::<PointKey>::new();
+    let mut endpoint_degrees = BTreeMap::<PointKey, usize>::new();
+    for wire in &document.wires {
+        points.insert(PointKey::from(&wire.start));
+        points.insert(PointKey::from(&wire.end));
+        *endpoint_degrees
+            .entry(PointKey::from(&wire.start))
+            .or_default() += 1;
+        *endpoint_degrees
+            .entry(PointKey::from(&wire.end))
+            .or_default() += 1;
+    }
+    for point in &document.junctions {
+        points.insert(PointKey::from(point));
+    }
+    for point in &document.no_connects {
+        points.insert(PointKey::from(point));
+    }
+    for label in &document.label_points {
+        points.insert(PointKey::from(&label.point));
+    }
+    for pin in &document.pins {
+        if let Some(point) = &pin.point {
+            points.insert(PointKey::from(point));
+        }
+    }
+    let points = points.into_iter().collect::<Vec<_>>();
+    let mut index = BTreeMap::<PointKey, usize>::new();
+    for (position, point) in points.iter().copied().enumerate() {
+        index.insert(point, position);
+    }
+    let mut dsu = DisjointSet::new(points.len());
+    for wire in &document.wires {
+        let start = PointKey::from(&wire.start);
+        let end = PointKey::from(&wire.end);
+        if let (Some(start), Some(end)) = (index.get(&start), index.get(&end)) {
+            dsu.union(*start, *end);
+        }
+    }
+    let mut builders = BTreeMap::<usize, ConnectivityBuilder>::new();
+    for (point_index, point) in points.iter().copied().enumerate() {
+        let root = dsu.find(point_index);
+        builders.entry(root).or_default().wire_point_count += 1;
+        if endpoint_degrees.get(&point).copied() == Some(1) {
+            builders.entry(root).or_default().dangling_endpoint_count += 1;
+        }
+        if document
+            .junctions
+            .iter()
+            .any(|junction| PointKey::from(junction) == point)
+        {
+            builders.entry(root).or_default().junction_count += 1;
+        }
+        if document
+            .no_connects
+            .iter()
+            .any(|no_connect| PointKey::from(no_connect) == point)
+        {
+            builders.entry(root).or_default().no_connect_count += 1;
+        }
+    }
+    for label in &document.label_points {
+        if let Some(point_index) = index.get(&PointKey::from(&label.point)) {
+            builders
+                .entry(dsu.find(*point_index))
+                .or_default()
+                .labels
+                .insert(label.name.clone());
+        }
+    }
+    for pin in &document.pins {
+        if let Some(point) = &pin.point
+            && let Some(point_index) = index.get(&PointKey::from(point))
+        {
+            builders
+                .entry(dsu.find(*point_index))
+                .or_default()
+                .pins
+                .push(pin.clone());
+        }
+    }
+    let mut nets = Vec::new();
+    for (number, (_, builder)) in builders.into_iter().enumerate() {
+        let labels = builder.labels.into_iter().collect::<Vec<_>>();
+        let id = labels
+            .first()
+            .cloned()
+            .unwrap_or_else(|| format!("N{}", number + 1));
+        let has_no_connect = builder.no_connect_count > 0;
+        if builder.dangling_endpoint_count > 0
+            && builder.pins.is_empty()
+            && labels.is_empty()
+            && !has_no_connect
+        {
+            check.add(
+                Finding::new(
+                    "KICAD_FLOATING_WIRE_ENDPOINT",
+                    Severity::Warning,
+                    "wire endpoint does not connect to another wire, pin, label, or junction",
+                )
+                .with_detail("net", id.clone()),
+            );
+        }
+        if builder.pins.len() == 1 && labels.is_empty() && !has_no_connect {
+            check.add(
+                Finding::new(
+                    "KICAD_SINGLE_PIN_NET",
+                    Severity::Warning,
+                    "network contains only one identifiable pin and no label",
+                )
+                .with_detail("net", id.clone())
+                .with_detail(
+                    "reference",
+                    builder.pins[0].reference.clone().unwrap_or_default(),
+                )
+                .with_detail("pin", builder.pins[0].number.clone()),
+            );
+        }
+        let has_output = builder.pins.iter().any(|pin| {
+            matches!(
+                pin.electrical_type
+                    .as_deref()
+                    .map(str::to_ascii_lowercase)
+                    .as_deref(),
+                Some("output") | Some("power_output") | Some("tristate")
+            )
+        });
+        let has_input = builder.pins.iter().any(|pin| {
+            matches!(
+                pin.electrical_type
+                    .as_deref()
+                    .map(str::to_ascii_lowercase)
+                    .as_deref(),
+                Some("input") | Some("power_input") | Some("bidirectional")
+            )
+        });
+        if has_input && !has_output && !has_no_connect {
+            check.add(
+                Finding::new(
+                    "KICAD_NO_DRIVER",
+                    Severity::Warning,
+                    "network has input-like pins but no identifiable output driver",
+                )
+                .with_detail("net", id.clone()),
+            );
+        }
+        if has_output
+            && builder
+                .pins
+                .iter()
+                .filter(|pin| {
+                    matches!(
+                        pin.electrical_type
+                            .as_deref()
+                            .map(str::to_ascii_lowercase)
+                            .as_deref(),
+                        Some("output") | Some("power_output")
+                    )
+                })
+                .count()
+                > 1
+        {
+            check.add(
+                Finding::new(
+                    "KICAD_MULTIPLE_DRIVERS",
+                    Severity::Error,
+                    "network has multiple output-like pins",
+                )
+                .with_detail("net", id.clone()),
+            );
+        }
+        nets.push(KicadConnectivityNet {
+            id,
+            labels,
+            pins: builder.pins,
+            wire_point_count: builder.wire_point_count,
+            no_connect_count: builder.no_connect_count,
+        });
+    }
+    if document.pins.is_empty() && document.wires.is_empty() {
+        check.add(Finding::new(
+            "KICAD_NO_CONNECTIVITY_DATA",
+            Severity::Warning,
+            "schematic has no globally mappable pins or wires; connectivity review is incomplete",
+        ));
+    }
+    KicadConnectivity {
+        wire_count: document.wires.len(),
+        junction_count: document.junctions.len(),
+        no_connect_count: document.no_connects.len(),
+        pin_count: document.pins.len(),
+        nets,
+        check,
+    }
+}
+
+#[derive(Default)]
+struct ConnectivityBuilder {
+    labels: BTreeSet<String>,
+    pins: Vec<KicadPin>,
+    wire_point_count: usize,
+    dangling_endpoint_count: usize,
+    junction_count: usize,
+    no_connect_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct PointKey(i64, i64);
+
+impl From<&KicadPoint> for PointKey {
+    fn from(point: &KicadPoint) -> Self {
+        Self(
+            (point.x * 1_000_000.0).round() as i64,
+            (point.y * 1_000_000.0).round() as i64,
+        )
+    }
+}
+
+struct DisjointSet {
+    parents: Vec<usize>,
+    ranks: Vec<usize>,
+}
+
+impl DisjointSet {
+    fn new(length: usize) -> Self {
+        Self {
+            parents: (0..length).collect(),
+            ranks: vec![0; length],
+        }
+    }
+
+    fn find(&mut self, value: usize) -> usize {
+        if self.parents[value] != value {
+            let parent = self.parents[value];
+            self.parents[value] = self.find(parent);
+        }
+        self.parents[value]
+    }
+
+    fn union(&mut self, left: usize, right: usize) {
+        let mut left = self.find(left);
+        let mut right = self.find(right);
+        if left == right {
+            return;
+        }
+        if self.ranks[left] < self.ranks[right] {
+            std::mem::swap(&mut left, &mut right);
+        }
+        self.parents[right] = left;
+        if self.ranks[left] == self.ranks[right] {
+            self.ranks[left] += 1;
+        }
+    }
 }
 
 pub fn inspect_kicad_project(
@@ -500,6 +843,164 @@ fn collect_document_data(
     for child in items.iter().skip(1) {
         collect_document_data(child, kind, components, nets, labels, layers);
     }
+}
+
+fn collect_schematic_connectivity(
+    root: &SExpr,
+    labels: &mut BTreeSet<String>,
+    label_points: &mut Vec<KicadLabel>,
+) -> (
+    Vec<KicadWire>,
+    Vec<KicadPoint>,
+    Vec<KicadPoint>,
+    Vec<KicadPin>,
+) {
+    let mut wires = Vec::new();
+    let mut junctions = Vec::new();
+    let mut no_connects = Vec::new();
+    let mut pins = Vec::new();
+    collect_connectivity_nodes(
+        root,
+        None,
+        labels,
+        label_points,
+        &mut wires,
+        &mut junctions,
+        &mut no_connects,
+        &mut pins,
+    );
+    (wires, junctions, no_connects, pins)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_connectivity_nodes(
+    node: &SExpr,
+    symbol_reference: Option<&str>,
+    labels: &mut BTreeSet<String>,
+    label_points: &mut Vec<KicadLabel>,
+    wires: &mut Vec<KicadWire>,
+    junctions: &mut Vec<KicadPoint>,
+    no_connects: &mut Vec<KicadPoint>,
+    pins: &mut Vec<KicadPin>,
+) {
+    let Some(items) = node.as_list() else { return };
+    let head = atom(items.first());
+    if head == "lib_symbols" {
+        return;
+    }
+    let current_reference = if head == "symbol" {
+        find_property(node, "Reference")
+    } else {
+        None
+    };
+    let reference = current_reference.as_deref().or(symbol_reference);
+    match head {
+        "wire" => {
+            if let Some(wire) = parse_wire(node) {
+                wires.push(wire);
+            }
+        }
+        "junction" => {
+            if let Some(point) = find_direct_point(node, "at") {
+                junctions.push(point);
+            }
+        }
+        "no_connect" => {
+            if let Some(point) = find_direct_point(node, "at") {
+                no_connects.push(point);
+            }
+        }
+        "label" | "global_label" | "hierarchical_label" => {
+            if let Some(name) = string_at(items.get(1))
+                && let Some(point) = find_direct_point(node, "at")
+            {
+                labels.insert(name.to_owned());
+                label_points.push(KicadLabel {
+                    name: name.to_owned(),
+                    point,
+                });
+            }
+        }
+        "pin" => {
+            if let Some(pin) = parse_pin(node, reference) {
+                pins.push(pin);
+            }
+        }
+        _ => {}
+    }
+    for child in items.iter().skip(1) {
+        collect_connectivity_nodes(
+            child,
+            reference,
+            labels,
+            label_points,
+            wires,
+            junctions,
+            no_connects,
+            pins,
+        );
+    }
+}
+
+fn parse_wire(node: &SExpr) -> Option<KicadWire> {
+    let items = node.as_list()?;
+    let points = items.iter().skip(1).find_map(|child| {
+        let values = child.as_list()?;
+        if atom(values.first()) != "pts" {
+            return None;
+        }
+        let coordinates = values
+            .iter()
+            .skip(1)
+            .filter_map(|point| {
+                let point_items = point.as_list()?;
+                (atom(point_items.first()) == "xy").then(|| parse_point(point_items))
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+        (coordinates.len() >= 2).then(|| KicadWire {
+            start: coordinates[0].clone(),
+            end: coordinates[coordinates.len() - 1].clone(),
+        })
+    })?;
+    Some(points)
+}
+
+fn parse_pin(node: &SExpr, reference: Option<&str>) -> Option<KicadPin> {
+    let items = node.as_list()?;
+    let electrical_type = atom_opt(items.get(1)).map(str::to_owned);
+    let point = items.iter().skip(1).find_map(|child| {
+        let values = child.as_list()?;
+        (atom(values.first()) == "at")
+            .then(|| parse_point(values))
+            .flatten()
+    });
+    let name = find_direct_string(node, "name");
+    let number = find_direct_string(node, "number")?;
+    Some(KicadPin {
+        reference: reference.map(str::to_owned),
+        number,
+        name,
+        electrical_type,
+        point,
+    })
+}
+
+fn find_direct_point(node: &SExpr, head: &str) -> Option<KicadPoint> {
+    let items = node.as_list()?;
+    items.iter().skip(1).find_map(|child| {
+        let values = child.as_list()?;
+        (atom(values.first()) == head)
+            .then(|| parse_point(values))
+            .flatten()
+    })
+}
+
+fn parse_point(items: &[SExpr]) -> Option<KicadPoint> {
+    Some(KicadPoint {
+        x: atom_opt(items.get(1))?.parse().ok()?,
+        y: atom_opt(items.get(2))?.parse().ok()?,
+    })
 }
 
 fn parse_pcb_footprint(node: &SExpr) -> Option<KicadComponent> {

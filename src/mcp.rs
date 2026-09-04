@@ -20,12 +20,13 @@ use crate::{
     config::AppConfig,
     domain::{
         Artifact, CheckResult, Finding, ManufacturingProfile, PackageLimits, ReleaseKind,
-        ReleaseReport, ReleaseRequest, Severity, Status, analyze_requirement_impact,
-        build_traceability_matrix, classify_pcb_file, compare_bom_cpl, compare_kicad_revisions,
-        inspect_kicad_project, inspect_package, parse_bom, parse_cpl, parse_kicad_document,
-        parse_requirements, parse_trace_links, read_package_member, review_bom_risk,
-        review_kicad_power_tree, review_requirement_quality, trace_kicad_signal, validate_bom,
-        validate_gerber_set, validate_ipc2581, validate_release, validate_spice_netlist,
+        ReleaseReport, ReleaseRequest, Severity, Status, analyze_kicad_connectivity,
+        analyze_requirement_impact, build_traceability_matrix, classify_pcb_file, compare_bom_cpl,
+        compare_kicad_revisions, inspect_kicad_project, inspect_package, parse_bom, parse_cpl,
+        parse_kicad_document, parse_requirements, parse_trace_links, read_package_member,
+        review_bom_risk, review_kicad_power_tree, review_requirement_quality, trace_kicad_signal,
+        validate_bom, validate_gerber_set, validate_ipc2581, validate_release,
+        validate_spice_netlist,
     },
     kicad::run_kicad_checks,
 };
@@ -253,6 +254,7 @@ impl ElectronicsMcp {
             "release_kinds": ["fabrication", "assembly"],
             "workflow_tools": ["requirements_ingest", "requirements_quality_review", "requirements_traceability", "requirements_change_impact", "bom_review_risk", "spice_validate_netlist"],
             "kicad_native_tools": ["kicad_inspect_design", "kicad_semantic_review", "kicad_power_tree_review", "kicad_trace_signal", "kicad_compare_revisions"],
+            "kicad_connectivity_tools": ["kicad_connectivity_review"],
             "network": false,
             "source_files_read_only": true,
             "allowed_roots": self.config.filesystem.allowed_roots,
@@ -570,6 +572,33 @@ impl ElectronicsMcp {
                 )
             }
             Err(error) => ToolEnvelope::failure("KICAD_SEMANTIC_REVIEW_FAILED", error),
+        })
+    }
+
+    #[tool(
+        description = "基于原理图 wire/junction/label/no_connect/pin 坐标推导网络，报告浮空端点、单引脚网和驱动缺口。"
+    )]
+    fn kicad_connectivity_review(
+        &self,
+        Parameters(params): Parameters<KicadDesignParams>,
+    ) -> Json<ToolEnvelope> {
+        Json(match self.read_kicad_project(&params.path) {
+            Ok(project) => {
+                let mut checks = vec![project.check.clone()];
+                let mut connectivity = Vec::new();
+                for document in &project.documents {
+                    let result = analyze_kicad_connectivity(document);
+                    checks.push(result.check.clone());
+                    connectivity.push(result);
+                }
+                ToolEnvelope::success(
+                    "KiCad 原理图连通性审查完成",
+                    checks,
+                    Vec::new(),
+                    &json!({ "project": project, "connectivity": connectivity }),
+                )
+            }
+            Err(error) => ToolEnvelope::failure("KICAD_CONNECTIVITY_REVIEW_FAILED", error),
         })
     }
 

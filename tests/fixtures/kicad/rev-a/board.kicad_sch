@@ -7,6 +7,7 @@
     (property "Reference" "R1" (at 0 0 0) (effects (font (size 1 1))))
     (property "Value" "10k" (at 0 0 0) (effects (font (size 1 1))))
     (property "Footprint" "Resistor_SMD:R_0603_1608Metric" (at 0 0 0) (effects (font (size 1 1))))
+    (pin output line (at 10 10 0) (length 2.54) (name "OUT") (number "1"))
   )
   (symbol
     (lib_id "Regulator_Linear:AP2112K-3.3")
@@ -16,5 +17,7 @@
   )
   (label "VCC_3V3" (at 10 5 0) (effects (font (size 1 1))))
   (label "GND" (at 10 15 0) (effects (font (size 1 1))))
+  (wire (pts (xy 10 10) (xy 20 10)) (stroke (width 0) (type default)) (uuid 11111111-1111-1111-1111-111111111111))
+  (junction (at 20 10) (diameter 0) (color 0 0 0 0) (uuid 22222222-2222-2222-2222-222222222222))
+  (no_connect (at 10 15) (uuid 33333333-3333-3333-3333-333333333333))
 )
-

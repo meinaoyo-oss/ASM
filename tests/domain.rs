@@ -2,11 +2,12 @@ use std::{fs, io::Write, path::PathBuf};
 
 use electronics_manufacturing_mcp::domain::{
     ManufacturingProfile, PackageLimits, ReleaseKind, ReleaseRequest, Severity, Status,
-    analyze_requirement_impact, build_traceability_matrix, classify_pcb_file, compare_bom_cpl,
-    compare_kicad_revisions, inspect_kicad_project, inspect_package, parse_bom, parse_cpl,
-    parse_kicad_document, parse_requirements, parse_trace_links, review_bom_risk,
-    review_kicad_power_tree, review_requirement_quality, trace_kicad_signal, validate_gerber_set,
-    validate_ipc2581, validate_release, validate_spice_netlist,
+    analyze_kicad_connectivity, analyze_requirement_impact, build_traceability_matrix,
+    classify_pcb_file, compare_bom_cpl, compare_kicad_revisions, inspect_kicad_project,
+    inspect_package, parse_bom, parse_cpl, parse_kicad_document, parse_requirements,
+    parse_trace_links, review_bom_risk, review_kicad_power_tree, review_requirement_quality,
+    trace_kicad_signal, validate_gerber_set, validate_ipc2581, validate_release,
+    validate_spice_netlist,
 };
 
 fn fixture(path: &str) -> PathBuf {
@@ -340,6 +341,13 @@ fn kicad_native_parser_extracts_components_layers_and_power() {
     );
     assert!(pcb.layers.contains(&"F.Cu".to_owned()));
     assert!(sch.labels.contains(&"VCC_3V3".to_owned()));
+    assert_eq!(sch.wires.len(), 1);
+    assert_eq!(sch.pins.len(), 1);
+    assert_eq!(sch.no_connects.len(), 1);
+    let connectivity = analyze_kicad_connectivity(&sch);
+    assert_eq!(connectivity.wire_count, 1);
+    assert_eq!(connectivity.pin_count, 1);
+    assert!(connectivity.nets.iter().any(|net| net.pins.len() == 1));
     let project = inspect_kicad_project(vec![pcb, sch], "rev-a");
     assert_eq!(project.component_count, 4);
     let power = review_kicad_power_tree(&project);
